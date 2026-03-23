@@ -1,6 +1,6 @@
 
 # Human Cell Targeted Lipidomics Analysis Pipeline
-![IMAGE_DESCRIPTION](images/lipidomics2.png)
+![IMAGE_DESCRIPTION](images/lipidomics1.png)
 ## Related publication
 
 **Chlamydia-like bacterium _Simkania negevensis_ exploits host sphingolipids for infection and progeny formation**
