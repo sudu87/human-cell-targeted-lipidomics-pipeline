@@ -21,7 +21,6 @@ It includes workflows for:
 ## Repository structure
 
 ```text
-.
 ├─ README.md
 ├─ docs/
 │  ├─ heatmap_average_replicates.md
@@ -37,7 +36,7 @@ It includes workflows for:
    ├─ hist_log10_values.png
    ├─ density_raw_vs_log.png
    └─ qqplot_residuals.png
-
+```
 ## Getting started
 
 This file lays the foundation of lipidomics analysis including multivariate statistics and visualizations.
