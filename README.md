@@ -1,5 +1,4 @@
 
-# Human Cell Targeted Lipidomics Analysis Pipeline
 ![IMAGE_DESCRIPTION](images/lipidomics1.png)
 ## Related publication
 
