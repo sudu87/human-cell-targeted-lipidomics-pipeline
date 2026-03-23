@@ -32,7 +32,11 @@ It includes workflows for:
 │  ├─ differential_lipid_heatmap.R
 │  ├─ permanova_inhibitor_analysis.R
 │  └─ ...
-````
+└─ images/
+   ├─ hist_raw_values.png
+   ├─ hist_log10_values.png
+   ├─ density_raw_vs_log.png
+   └─ qqplot_residuals.png
 
 ## Getting started
 
