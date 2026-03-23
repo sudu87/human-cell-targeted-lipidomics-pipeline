@@ -76,4 +76,3 @@ The script writes the following files to the diagnostics output directory:
 * The script does not return a main summary object.
 * Make sure the required packages and data objects are available before running the script.
 
-````
