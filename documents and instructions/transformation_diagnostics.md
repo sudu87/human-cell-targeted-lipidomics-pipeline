@@ -11,7 +11,7 @@ This document explains how to use the script `scripts/transformation_diagnostics
 
 ```r
 out_dir <- "path/to/your/output_directory/"
-
+```
 * Make sure `df` contains the lipid measurement data.
 * Make sure `lipid_cols` contains the names of the lipid measurement columns.
 * Make sure your dataset contains a column named `infection`, because it is used for the ANOVA residual check.
@@ -42,7 +42,7 @@ Update the output directory if needed:
 
 ```r
 out_dir <- "path/to/your/output_directory/"
-
+```
 If this script is run independently, make sure `df` and `lipid_cols` are defined before running it.
 
 ## What the script does
