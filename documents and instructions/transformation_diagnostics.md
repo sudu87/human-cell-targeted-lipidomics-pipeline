@@ -70,16 +70,16 @@ The script writes the following files to the diagnostics output directory:
 ## Example plots
 
 ### Raw value distribution
-![Raw value distribution](./images/hist_raw_values.png)
+![Raw value distribution](../images/hist_raw_values.png)
 
 ### Log10-transformed value distribution
-![Log10-transformed value distribution](./images/hist_log10_values.png)
+![Log10-transformed value distribution](../images/hist_log10_values.png)
 
 ### Density plots
-![Density plots](./images/density_raw_vs_log.png)
+![Density plots](../images/density_raw_vs_log.png)
 
 ### QQ-plot of pooled residuals
-![QQ-plot of pooled residuals](./images/qqplot_residuals.png)
+![QQ-plot of pooled residuals](../images/qqplot_residuals.png)
 
 ## Notes
 
