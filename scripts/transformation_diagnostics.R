@@ -34,10 +34,8 @@ hist(
 )
 dev.off()
 
-## ---- Density plots (raw vs log) ----
-png(file.path(out_dir_diag, "density_raw_vs_log.png"), width = 1200, height = 800, res = 150)
-par(mfrow = c(1, 2))
-
+## Density plot of raw values
+png(file.path(out_dir_diag, "density_raw_values.png"), width = 1000, height = 800, res = 150)
 plot(
   density(all_values, na.rm = TRUE),
   main = "Density (raw)",
@@ -45,7 +43,10 @@ plot(
   col = "steelblue",
   lwd = 2
 )
+dev.off()
 
+## Density plot of log10-transformed values
+png(file.path(out_dir_diag, "density_log10_values.png"), width = 1000, height = 800, res = 150)
 plot(
   density(log10(all_values + 1), na.rm = TRUE),
   main = "Density (log10)",
@@ -53,10 +54,7 @@ plot(
   col = "tomato",
   lwd = 2
 )
-
-par(mfrow = c(1, 1))
 dev.off()
-
 ## ---- QQ-plot of pooled ANOVA residuals ----
 all_resids <- unlist(lapply(lipid_cols, function(lip) {
   form <- reformulate("infection", response = lip)
