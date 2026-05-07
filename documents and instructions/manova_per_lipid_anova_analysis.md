@@ -2,7 +2,7 @@
 
 # Total lipid MANOVA and posthoc analysis
 
-This document explains how to use the script `scripts/total_lipids_manova_simple.R`.
+This document explains how to use the script `scripts/manova_per_lipid_anova_analysis.R`.
 
 ## Background 
 ## When MANOVA is appropriate
