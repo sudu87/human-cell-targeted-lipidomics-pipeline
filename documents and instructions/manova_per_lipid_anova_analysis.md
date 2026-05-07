@@ -1,44 +1,142 @@
-# MANOVA + Per-Lipid ANOVA + Post-hoc FDR Workflow
+# MANOVA followed by Per-Lipid ANOVA and Post-hoc analysis
 
-This workflow tests whether the lipid profile differs across infection status, inhibitor treatment, and their interaction. It combines:
+This document explains how to use the script `scripts/total_lipids_manova_simple.R`.
 
-1. **MANOVA** as the global multivariate test across all lipid species.
-2. **Per-lipid ANOVA** to identify which individual lipids contribute to group differences.
-3. **Estimated marginal means post-hoc contrasts** for biologically targeted comparisons.
-4. **Benjamini–Hochberg false discovery rate correction** for multiple testing.
+## Instructions
 
-The intended input is an Excel file containing one row per independent biological sample and one column per lipid species.
-
-The script assumes two metadata columns:
-
-| Column | Meaning |
-|---|---|
-| `infection` | Infection status, e.g. `Uninfected`, `infected` |
-| `inhibitor` | Treatment group, e.g. `AKS466`, `HPA-12`, `Desipramin`, `Myriocin`, `ARC39`, `untreated`, `DMSO` |
-
-All remaining numeric columns are treated as lipid abundance variables unless explicitly added to `additional_meta_cols` in the script.
-
----
-
-Statistical model
-
-The multivariate model is:
+- Place your input Excel file in the correct project folder.
+- Open `scripts/total_lipids_manova_simple.R`.
+- Replace the input file path with the Excel file you want to analyze:
 
 ```r
-data matrix ~ infection * inhibitor
+input_file <- "averaged_sphingolipidspecies/Myriocin.xlsx"
 ```
 
-This tests three terms:
+- Make sure the Excel file contains metadata columns named `infection` and `inhibitor`.
+- Keep rows as individual samples and columns as metadata plus lipid measurements.
+- Make sure lipid measurement columns contain numeric values.
+- Update the `infection` and `inhibitor` factor levels if your labels are different.
+- Update the output file paths if you want to save the results somewhere else.
+- Run the script after loading or installing the required R packages.
 
-| Term | Interpretation |
-|---|---|
-| `infection` | Overall lipidome difference between infected and uninfected samples |
-| `inhibitor` | Overall lipidome difference among inhibitor/treatment groups |
-| `infection:inhibitor` | Whether infection effects depend on inhibitor treatment |
+## Overview
 
-The script reports MANOVA using **Pillai's trace** as the primary multivariate test statistic.
+This script performs a simple MANOVA workflow for total lipid data.
 
----
+The script:
+
+- reads one Excel file
+- cleans column names
+- encodes `infection` and `inhibitor` as factors
+- identifies lipid columns
+- applies `log10(x + 1)` transformation
+- creates a lipid response matrix
+- runs MANOVA using `infection * inhibitor`
+- reports Pillai's trace
+- reports per-lipid ANOVA results using `summary.aov`
+- plots residuals with a normal density curve
+- runs posthoc infection contrasts within each inhibitor
+- runs posthoc inhibitor contrasts within each infection
+- applies BH/FDR correction in the posthoc tests
+- writes posthoc results to Excel files
+
+## Input requirements
+
+Your Excel file must:
+
+- be an `.xlsx` file
+- contain one row per sample
+- contain a column named `infection`
+- contain a column named `inhibitor`
+- contain lipid measurements in the remaining columns
+- use consistent infection labels
+- use consistent inhibitor labels
+
+## Specific lines you may need to edit
+
+Update the input file:
+
+```r
+input_file <- "averaged_sphingolipidspecies/Myriocin.xlsx"
+```
+
+Update the infection levels if needed:
+
+```r
+infection = factor(infection, levels = c("Uninfected", "infected"))
+```
+
+Update the inhibitor levels if needed:
+
+```r
+inhibitor = factor(
+  inhibitor,
+  levels = c("AKS466", "HPA-12", "Desipramin", "Myriocin", "ARC39", "untreated", "DMSO")
+)
+```
+
+Update the output file for infected vs uninfected comparisons within each inhibitor:
+
+```r
+out_infection <- "statistics/total lipid stats/pairwise differences/myr_posthoc_infection_contrasts_by_inhibitor.xlsx"
+```
+
+Update the output file for inhibitor comparisons within each infection group:
+
+```r
+out_inhibitor <- "statistics/individual lipid stats/univariate pairwise analysis/myr_ind_posthoc_inhibitor_contrasts_by_infection.xlsx"
+```
+
+## What the script does
+
+### MANOVA
+
+The script creates a lipid matrix and fits:
+
+```r
+myr_manova_fit <- manova(resp_mat ~ infection * inhibitor, data = df)
+```
+
+The MANOVA result is printed using Pillai's trace:
+
+```r
+summary(myr_manova_fit, test = "Pillai")
+```
+
+Per-lipid ANOVA results are printed using:
+
+```r
+summary.aov(myr_manova_fit)
+```
+
+### Posthoc analysis 1
+
+The first posthoc analysis compares infected vs uninfected samples within each inhibitor:
+
+```r
+em <- emmeans(fit, ~ infection | inhibitor)
+pw <- pairs(em, adjust = "BH")
+```
+
+### Posthoc analysis 2
+
+The second posthoc analysis compares inhibitors within each infection group:
+
+```r
+em <- emmeans(fit, ~ inhibitor | infection)
+pw <- pairs(em, adjust = "BH")
+```
+
+## Output
+
+The script writes two Excel files:
+
+- `myr_posthoc_infection_contrasts_by_inhibitor.xlsx`
+- `myr_ind_posthoc_inhibitor_contrasts_by_infection.xlsx`
+
+It also prints the MANOVA and per-lipid ANOVA results in the R console.
+
+## Notes
 
 ## Why Pillai's trace?
 
@@ -50,7 +148,6 @@ Interpretation:
 - A small p-value, for example `p < 0.05`, indicates evidence against the null hypothesis that the multivariate lipid mean vectors are equal for that model term.
 - A significant MANOVA result does **not** identify which individual lipid differs; follow-up per-lipid ANOVA and post-hoc contrasts are required.
 
----
 
 ## When MANOVA is appropriate
 
@@ -64,7 +161,6 @@ MANOVA is appropriate when:
 
 This is often conceptually appropriate for sphingolipid or lipidomics data because lipid species within the same pathway are typically correlated and are not independent biological endpoints.
 
----
 
 ## When MANOVA is not recommended
 
