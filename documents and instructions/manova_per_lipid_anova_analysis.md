@@ -1,7 +1,5 @@
 # MANOVA followed by Per-Lipid ANOVA and Post-hoc analysis
 
-# Total lipid MANOVA and posthoc analysis
-
 This document explains how to use the script `scripts/manova_per_lipid_anova_analysis.R`.
 
 ## Background 
