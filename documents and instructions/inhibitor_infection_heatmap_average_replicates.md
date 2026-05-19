@@ -2,7 +2,7 @@
 
 # Heatmap from averaged replicates
 
-This document explains how to use the script `scripts/heatmap_average_replicates.R`.
+This document explains how to use the script `scripts/inhibitor_infection_heatmap_average_replicates.R`.
 
 ## Instructions
 
