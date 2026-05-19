@@ -1,6 +1,6 @@
-# Averaged lipid heatmap analysis
+# Cell line averaged lipid heatmap analysis
 
-This document explains how to use the script `scripts/averaged_lipid_heatmap_analysis.R`.
+This document explains how to use the script `scripts/cell_line_averaged_lipid_heatmap_analysis.R`.
 
 ## Instructions
 
