@@ -1,5 +1,5 @@
 # **Disentangling Sphingolipid Metabolism In _Simkania_ Infection in Human Cells By Targetted Lipidomics Analysis Of Human Cells.**
-![IMAGE_DESCRIPTION](images/lipidomics2_250526.png)
+![IMAGE_DESCRIPTION](images/lipidomics3_250526.png)
 ## Related publication
 
 **Chlamydia-like bacterium _Simkania negevensis_ exploits host sphingolipids for infection and progeny formation**
