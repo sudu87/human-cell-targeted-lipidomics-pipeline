@@ -27,7 +27,7 @@ The analysis workflow includes:
 
 ```text
 ├─ README.md
-├─ docs/
+├─ documents and instructions/
 │  ├─ heatmap_average_replicates.md
 │  ├─ differential_lipid_heatmap.md
 │  └─ ...
@@ -83,7 +83,7 @@ source("scripts/differential_lipid_heatmap.R")
 source("scripts/permanova_inhibitor_analysis.R")
 ```
 
-Detailed explanations of selected workflows are provided in the `docs/` directory.
+Detailed explanations of selected workflows are provided in the `documents and instructions/` directory.
 
 ## Outputs
 
