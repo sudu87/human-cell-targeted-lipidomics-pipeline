@@ -9,7 +9,7 @@ authors:
   - family-names: Mohanty
     given-names: Arpita
 
-repository-code: "https://github.com/YOUR-USERNAME/YOUR-REPOSITORY"
+repository-code: "https://github.com/sudu87/human-cell-targeted-lipidomics-pipeline"
 abstract: "R scripts and documentation for targeted lipidomics analysis of sphingolipid metabolism during Simkania negevensis infection in human cells."
 keywords:
   - lipidomics
