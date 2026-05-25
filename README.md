@@ -4,9 +4,9 @@
 
 ## Related publication
 
-**Chlamydia-like bacterium _Simkania negevensis_ exploits host sphingolipids for infection and progeny formation**
+**Chlamydia-like Bacterium _Simkania negevensis_ Exploits Host Sphingolipids during Infection**
 
-Mohanty, A., Weinrich, J. D., Das, S., Rühling, M., Schumacher, F., Seibel, J., Fraunholz, M., Kleuser, B., and Kozjak-Pavlovic, V.
+Mohanty, A., Weinrich, J. D., Schumacher, F., Rühling, M., Sunuwar, S., Szegedi, H., Wigger, D., Schmelz, F., Panda, B. K., Kappe, C., Brenner, D., Schirmer, M., Arenz, C., Seibel, J., Holthuis, J. C. M., Das, S., Fraunholz, M., Kleuser, B., and Kozjak-Pavlovic, V.
 
 ## Overview
 
@@ -27,7 +27,7 @@ The analysis workflow includes:
 
 ```text
 ├─ README.md
-├─ documents and instructions/
+├─ docs/
 │  ├─ heatmap_average_replicates.md
 │  ├─ differential_lipid_heatmap.md
 │  └─ ...
@@ -46,6 +46,79 @@ The analysis workflow includes:
 ## Getting started
 
 Before running the analysis scripts, make sure that R and the required packages are installed.
+
+Recommended R packages include:
+
+```r
+tidyverse
+pheatmap
+vegan
+ggplot2
+readxl
+janitor
+```
+
+Install missing packages with:
+
+```r
+install.packages(c(
+  "tidyverse",
+  "pheatmap",
+  "vegan",
+  "ggplot2",
+  "readxl",
+  "janitor"
+))
+```
+
+## Running the analysis
+
+Scripts are located in the `scripts/` directory. Each script performs a specific part of the lipidomics workflow.
+
+For example:
+
+```r
+source("scripts/heatmap_average_replicates.R")
+source("scripts/differential_lipid_heatmap.R")
+source("scripts/permanova_inhibitor_analysis.R")
+```
+
+Detailed explanations of selected workflows are provided in the `docs/` directory.
+
+## Outputs
+
+The scripts generate exploratory plots, heatmaps, and statistical summaries for lipid abundance patterns across experimental conditions.
+
+Typical outputs include:
+
+- raw and log-transformed value distributions
+- replicate-averaged heatmaps
+- differential lipid abundance heatmaps
+- PERMANOVA results
+- dispersion test results
+- diagnostic plots
+
+## Notes
+
+Input data files are not included in this repository unless explicitly stated. Please ensure that file paths inside the scripts are adjusted to match your local data directory.
+
+## Contact
+
+For questions about the lipidomics analysis pipeline, scripts, or reproducibility, please contact:
+
+**Sudip Das**  
+Email: your.email@example.com
+
+**Arpita Mohanty**  
+Email: your.email@example.com
+
+## Citation
+
+If you use this repository or adapt the analysis workflow, please cite the related publication listed above.
+
+## License
+
+Please add license information here, for example MIT, GPL-3, or institutional-use only.
 
 Recommended R packages include:
 
