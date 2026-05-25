@@ -1,5 +1,7 @@
-# **Disentangling Sphingolipid Metabolism In _Simkania_ Infection in Human Cells By Targetted Lipidomics Analysis Of Human Cells.**
-![IMAGE_DESCRIPTION](images/lipidomics3_250526.png)
+# Targeted lipidomics analysis of sphingolipid metabolism during _Simkania negevensis_ infection
+
+![Lipidomics workflow overview](images/lipidomics3_250526.png)
+
 ## Related publication
 
 **Chlamydia-like bacterium _Simkania negevensis_ exploits host sphingolipids for infection and progeny formation**
@@ -8,15 +10,18 @@ Mohanty, A., Weinrich, J. D., Das, S., Rühling, M., Schumacher, F., Seibel, J.,
 
 ## Overview
 
-This repository contains scripts and documentation for lipidomics data analysis in R.  
-It includes workflows for:
+This repository contains R scripts and documentation for the analysis of targeted lipidomics data from human cells infected with _Simkania negevensis_.
 
-- data import and cleaning
+The analysis workflow includes:
+
+- data import and preprocessing
+- data cleaning and quality assessment
 - replicate averaging
+- lipid abundance visualization
 - heatmap generation
-- multivariate statistics
+- multivariate statistical analysis
 - PERMANOVA and dispersion testing
-- downstream visualization and exploratory analysis
+- downstream exploratory visualization
 
 ## Repository structure
 
@@ -37,79 +42,70 @@ It includes workflows for:
    ├─ density_raw_vs_log.png
    └─ qqplot_residuals.png
 ```
+
 ## Getting started
 
-This file lays the foundation of lipidomics analysis including multivariate statistics and visualizations.
+Before running the analysis scripts, make sure that R and the required packages are installed.
 
-Before running the analysis scripts, make sure your working environment is set up correctly.
-
-## Knitting prerequisites
-
-Use the following setup chunk in R Markdown files to suppress unnecessary messages and warnings during rendering:
+Recommended R packages include:
 
 ```r
-knitr::opts_chunk$set(
-  message = FALSE,
-  warning = FALSE
-)
+tidyverse
+pheatmap
+vegan
+ggplot2
+readxl
+janitor
 ```
 
-## Clear environment if needed
+Install missing packages with:
 
 ```r
-rm(list = ls())
+install.packages(c(
+  "tidyverse",
+  "pheatmap",
+  "vegan",
+  "ggplot2",
+  "readxl",
+  "janitor"
+))
 ```
 
-## Check or set directory and load saved file if needed
+## Running the analysis
+
+Scripts are located in the `scripts/` directory. Each script performs a specific part of the lipidomics workflow.
+
+For example:
 
 ```r
-getwd()
-setwd("<YOUR DIRECTORY>")
-load("lipidomics.RData")
+source("scripts/heatmap_average_replicates.R")
+source("scripts/differential_lipid_heatmap.R")
+source("scripts/permanova_inhibitor_analysis.R")
 ```
 
-## Load required packages
+Detailed explanations of selected workflows are provided in the `docs/` directory.
 
-```r
-library(readxl)
-library(scales)
-library(dplyr)
-library(purrr)
-library(stringr)
-library(vegan)
-library(broom)
-library(ggplot2)
-library(emmeans)
-library(janitor)
-library(devtools)
-library(pairwiseAdonis)
-library(pheatmap)
-library(writexl)
-library(tidyr)
-library(ggrepel)
-library(rcompanion)
-library(ggpubr)
-library(MASS)
-library(tools)
-library(tibble)
-```
+## Outputs
 
-## Input data
+The scripts generate exploratory plots, heatmaps, and statistical summaries for lipid abundance patterns across experimental conditions.
 
-The analysis scripts generally expect Excel files containing:
+Typical outputs include:
 
-* sample metadata
-* treatment or inhibitor information
-* infection status
-* lipid measurement columns
+- raw and log-transformed value distributions
+- replicate-averaged heatmaps
+- differential lipid abundance heatmaps
+- PERMANOVA results
+- dispersion test results
+- diagnostic plots
 
-Specific input requirements are described in the corresponding files in the `docs/` folder.
+## Notes
 
-## How to use this repository
+Input data files are not included in this repository unless explicitly stated. Please ensure that file paths inside the scripts are adjusted to match your local data directory.
 
-* Read the relevant instruction file in `docs/` before running a script.
-* Open the matching `.R` file from the `scripts/` folder.
-* Replace placeholder file paths or directory paths with your own.
-* Check that column names and factor labels in your dataset match the expected format.
-* Run the script in R or RStudio after loading the required packages.
+## Citation
 
+If you use this repository or adapt the analysis workflow, please cite the related publication listed above.
+
+## License
+
+Please add license information here, for example MIT, GPL-3, or institutional-use only.
