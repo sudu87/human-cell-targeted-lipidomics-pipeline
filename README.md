@@ -107,10 +107,10 @@ Input data files are not included in this repository unless explicitly stated. P
 For questions about the lipidomics analysis pipeline, scripts, or reproducibility, please contact:
 
 **Sudip Das**  
-Email: your.email@example.com
+Email: sudip.das@tum.de
 
 **Arpita Mohanty**  
-Email: your.email@example.com
+Email: arpita.mohanty@uni-wuerzburg.de
 
 ## Citation
 
