@@ -1,6 +1,6 @@
 # PCA and PERMANOVA analysis for total sphingolipids
 
-This document explains how to use `scripts/pca_permanova_total_sphingolipids_analysis.R`.
+This document explains how to use `scripts/pca_permanova_inhibitor_sphingolipids_analysis.R`.
 
 The pipeline is designed for total sphingolipid Excel files where each file represents one inhibitor or control condition. It keeps the two solvent/control groups separate:
 
