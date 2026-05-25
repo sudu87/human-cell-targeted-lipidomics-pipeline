@@ -1,0 +1,64 @@
+cff-version: 1.2.0
+message: "If you use this repository or adapt the analysis workflow, please cite the related publication."
+title: "Targeted lipidomics analysis of sphingolipid metabolism during Simkania negevensis infection"
+type: software
+
+authors:
+  - family-names: Das
+    given-names: Sudip
+  - family-names: Mohanty
+    given-names: Arpita
+
+repository-code: "https://github.com/YOUR-USERNAME/YOUR-REPOSITORY"
+abstract: "R scripts and documentation for targeted lipidomics analysis of sphingolipid metabolism during Simkania negevensis infection in human cells."
+keywords:
+  - lipidomics
+  - sphingolipids
+  - Simkania negevensis
+  - infection biology
+  - R
+  - PERMANOVA
+license: MIT
+
+preferred-citation:
+  type: article
+  title: "Chlamydia-like Bacterium Simkania negevensis Exploits Host Sphingolipids during Infection"
+  authors:
+    - family-names: Mohanty
+      given-names: Arpita
+    - family-names: Weinrich
+      given-names: Jonas D.
+    - family-names: Schumacher
+      given-names: Fabian
+    - family-names: Rühling
+      given-names: Marcel
+    - family-names: Sunuwar
+      given-names: Sanisha
+    - family-names: Szegedi
+      given-names: Helena
+    - family-names: Wigger
+      given-names: Dominik
+    - family-names: Schmelz
+      given-names: Fabio
+    - family-names: Panda
+      given-names: Bapin Kumar
+    - family-names: Kappe
+      given-names: Christian
+    - family-names: Brenner
+      given-names: Daniela
+    - family-names: Schirmer
+      given-names: Melanie
+    - family-names: Arenz
+      given-names: Christoph
+    - family-names: Seibel
+      given-names: Jürgen
+    - family-names: Holthuis
+      given-names: Joost C. M.
+    - family-names: Das
+      given-names: Sudip
+    - family-names: Fraunholz
+      given-names: Martin
+    - family-names: Kleuser
+      given-names: Burkhard
+    - family-names: Kozjak-Pavlovic
+      given-names: Vera
