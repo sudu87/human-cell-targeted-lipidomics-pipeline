@@ -1,7 +1,7 @@
 
-# Heatmap from differential lipid analysis
+# Pairwise heatmaps for each lipid
 
-This document explains how to use the script `scripts/differential_lipid_heatmap.R`.
+This document explains how to use the script `scripts/pairwise_fdr_lipid_heatmap.R`.
 
 ## Instructions
 
