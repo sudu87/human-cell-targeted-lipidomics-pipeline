@@ -1,5 +1,5 @@
 
-# Pairwise heatmaps for each lipid
+# Pairwise comparison and FDR heatmaps for lipids
 
 This document explains how to use the script `scripts/pairwise_fdr_lipid_heatmap.R`.
 
