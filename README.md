@@ -29,11 +29,11 @@ The analysis workflow includes:
 ├─ README.md
 ├─ docs/
 │  ├─ heatmap_average_replicates.md
-│  ├─ differential_lipid_heatmap.md
+│  ├─ pairwise_fdr_lipid_heatmap.md
 │  └─ ...
 ├─ scripts/
 │  ├─ heatmap_average_replicates.R
-│  ├─ differential_lipid_heatmap.R
+│  ├─ pairwise_fdr_lipid_heatmap.R
 │  ├─ permanova_inhibitor_analysis.R
 │  └─ ...
 └─ images/
@@ -79,7 +79,7 @@ For example:
 
 ```r
 source("scripts/heatmap_average_replicates.R")
-source("scripts/differential_lipid_heatmap.R")
+source("scripts/pairwise_fdr_lipid_heatmap.R")
 source("scripts/permanova_inhibitor_analysis.R")
 ```
 
@@ -93,7 +93,7 @@ Typical outputs include:
 
 - raw and log-transformed value distributions
 - replicate-averaged heatmaps
-- differential lipid abundance heatmaps
+- pairwise comparison and fdr heatmaps
 - PERMANOVA results
 - dispersion test results
 - diagnostic plots
