@@ -44,7 +44,7 @@ legend_title <- "Treatment\nvs\nUntreated"
 
 ## Overview
 
-This script generates a heatmap from differential lipid analysis results. It converts `estimate` values to log2 fold change, masks non-significant values using `p.value < 0.05`, applies a custom lipid order, and stores the final plot as an R object.
+This script generates a heatmap from differential lipid analysis results. It converts `estimate` values to log2 values, masks non-significant values using `p.value < 0.05`, applies a custom lipid order, and stores the final plot as an R object.
 
 ## Input requirements
 
