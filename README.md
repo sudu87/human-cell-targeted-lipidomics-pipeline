@@ -27,14 +27,20 @@ The analysis workflow includes:
 
 ```text
 ├─ README.md
+├─ CITATION.cff
+├─ LICENSE
 ├─ documents and instructions/
 │  ├─ transformation_diagnostics.md
 │  ├─ sms12_manova_pca_dispersion_analysis.md
+│  ├─ sms12_individual_lipids_permanova_dispersion_analysis.md
+│  ├─ custom_pairwise_lipid_contrast_heatmap.md
 │  ├─ pairwise_fdr_lipid_heatmap.md
 │  └─ ...
 ├─ scripts/
 │  ├─ transformation_diagnostics.R
 │  ├─ sms12_manova_pca_dispersion_analysis.R
+│  ├─ sms12_individual_lipids_permanova_dispersion_analysis.R
+│  ├─ custom_pairwise_lipid_contrast_heatmap.R
 │  ├─ pairwise_fdr_lipid_heatmap.R
 │  └─ ...
 └─ images/
