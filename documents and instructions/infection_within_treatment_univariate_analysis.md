@@ -1,4 +1,4 @@
-# Compare infected vs uninfected within one treatment
+# Compare infected vs uninfected within each inhibitor
 
 This document explains how to use the script `scripts/infection_within_treatment_univariate_analysis.R`.
 
