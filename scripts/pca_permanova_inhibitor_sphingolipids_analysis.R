@@ -27,22 +27,19 @@ MIN_N  <- 4
 ## ---- Configure input files and labels ----
 analysis_configs <- list(
   dmso = list(
-    data_dir = "averaged_totalsphingolipids/new files/with_DMSO/",
-    out_dir = "averaged_totalsphingolipids/new files/with_DMSO/with_dmso_analysis_outputs_Mar2026/",
+    data_dir = "path/to/your/dmso_input_directory",
+    out_dir = "path/to/your/dmso_output_directory",
     name_map = c(
-      "AKS466_only_Total SL" = "AKS466 total",
-      "DMSO_only_Total SL" = "DMSO total",
-      "HPA-12_only_Total SL" = "HPA-12 total",
-      "Myriocin_only_Total SL" = "Myriocin total"
+      "control_file_name_without_extension" = "Control label",
+      "condition_file_name_without_extension" = "Condition label"
     )
   ),
   untreated = list(
-    data_dir = "averaged_totalsphingolipids/new files/with untreated/",
-    out_dir = "averaged_totalsphingolipids/new files/with untreated/with_untreated_analysis_outputs_Mar2026/",
+    data_dir = "path/to/your/untreated_input_directory",
+    out_dir = "path/to/your/untreated_output_directory",
     name_map = c(
-      "ARC39_only_Total SL" = "ARC39 total",
-      "untreated_only_Total SL" = "untreated total",
-      "Desipramin_only_Total SL" = "Desipramin total"
+      "control_file_name_without_extension" = "Control label",
+      "condition_file_name_without_extension" = "Condition label"
     )
   )
 )
@@ -59,11 +56,22 @@ data_dir <- cfg$data_dir
 out_dir  <- cfg$out_dir
 name_map <- cfg$name_map
 
+if (!dir.exists(data_dir)) {
+  stop(
+    "Input directory does not exist. Update data_dir for ANALYSIS_GROUP '",
+    ANALYSIS_GROUP,
+    "': ",
+    data_dir
+  )
+}
+
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
 ## ---- Read and align sheets: one file per inhibitor/control ----
 files <- list.files(data_dir, pattern = "\\.xlsx$", full.names = TRUE)
-stopifnot(length(files) >= 2)
+if (length(files) < 2) {
+  stop("Expected at least two .xlsx files in data_dir: ", data_dir)
+}
 
 read_inhibitor <- function(fp, map_vec) {
   raw_name <- file_path_sans_ext(basename(fp))

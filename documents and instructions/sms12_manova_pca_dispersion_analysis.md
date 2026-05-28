@@ -19,19 +19,17 @@ vegan
 
 Install missing packages before running the script.
 
-## Input file
+## User-defined paths
 
-The script expects the following Excel file by default:
+Open `scripts/sms12_manova_pca_dispersion_analysis.R` and set the input file, sheet name, and output directory:
 
-```text
-sms12_lipidomics/SMS1_2_Total lipids_no_19_test_file.xlsx
+```r
+input_file <- "path/to/your/input_file.xlsx"
+sheet_name <- "your_sheet_name"
+output_dir <- "path/to/your/output_directory"
 ```
 
-It reads the sheet:
-
-```text
-SMS1&2_Total lipids_uninfected
-```
+Use the exact sheet name from your Excel workbook for `sheet_name`.
 
 ## Input data requirements
 
@@ -71,22 +69,22 @@ The script performs the following steps:
 
 ## Output files
 
-Outputs are written to:
+Outputs are written to the user-defined `output_dir` and its `statistics` subfolder:
 
-```text
-sms12_lipidomics/
-sms12_lipidomics/statistics/
+```r
+plot_dir <- output_dir
+out_dir <- file.path(output_dir, "statistics")
 ```
 
 The script writes:
 
 ```text
-sms12_lipidomics/pca_variance_explained.csv
-sms12_lipidomics/pca_scores.csv
-sms12_lipidomics/pca_scree.pdf
-sms12_lipidomics/pca_scores.pdf
-sms12_lipidomics/statistics/manova_pillai.txt
-sms12_lipidomics/statistics/dispersion_test.txt
+<output_dir>/pca_variance_explained.csv
+<output_dir>/pca_scores.csv
+<output_dir>/pca_scree.pdf
+<output_dir>/pca_scores.pdf
+<output_dir>/statistics/manova_pillai.txt
+<output_dir>/statistics/dispersion_test.txt
 ```
 
 ## Main R objects created

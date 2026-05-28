@@ -27,39 +27,40 @@ tools
 
 Install missing packages before running the script.
 
-## Input folder structure
+## User-defined input folders and file labels
 
-The script expects the following input folders by default:
+Open `scripts/pca_permanova_inhibitor_sphingolipids_analysis.R` and update the paths in `analysis_configs`.
 
-```text
-averaged_totalsphingolipids/new files/with_DMSO/
-averaged_totalsphingolipids/new files/with untreated/
-```
-
-Each folder should contain `.xlsx` files. Each Excel file should correspond to one inhibitor or control condition.
-
-For the DMSO-soluble group, the default file-name mapping is:
+For the DMSO-soluble group, set:
 
 ```r
-name_map = c(
-  "AKS466_only_Total SL" = "AKS466 total",
-  "DMSO_only_Total SL" = "DMSO total",
-  "HPA-12_only_Total SL" = "HPA-12 total",
-  "Myriocin_only_Total SL" = "Myriocin total"
+dmso = list(
+  data_dir = "path/to/your/dmso_input_directory",
+  out_dir = "path/to/your/dmso_output_directory",
+  name_map = c(
+    "control_file_name_without_extension" = "Control label",
+    "condition_file_name_without_extension" = "Condition label"
+  )
 )
 ```
 
-For the water-soluble/untreated group, the default file-name mapping is:
+For the water-soluble/untreated group, set:
 
 ```r
-name_map = c(
-  "ARC39_only_Total SL" = "ARC39 total",
-  "untreated_only_Total SL" = "untreated total",
-  "Desipramin_only_Total SL" = "Desipramin total"
+untreated = list(
+  data_dir = "path/to/your/untreated_input_directory",
+  out_dir = "path/to/your/untreated_output_directory",
+  name_map = c(
+    "control_file_name_without_extension" = "Control label",
+    "condition_file_name_without_extension" = "Condition label"
+  )
 )
 ```
+
+Each input folder should contain `.xlsx` files. Each Excel file should correspond to one inhibitor or control condition.
 
 The names on the left must match the Excel filenames without `.xlsx`.
+The labels on the right are the condition names used in the combined data and plots.
 
 ## Input data requirements
 
@@ -75,7 +76,7 @@ The script adds the `inhibitor` column automatically based on the filename.
 
 ## Choosing which analysis to run
 
-Open `scripts/pca_permanova_total_sphingolipids_analysis.R` and set:
+Open `scripts/pca_permanova_inhibitor_sphingolipids_analysis.R` and set:
 
 ```r
 ANALYSIS_GROUP <- "dmso"
@@ -117,16 +118,10 @@ The script performs the following steps:
 
 ## Output files
 
-For the DMSO group, outputs are written by default to:
+Outputs are written to the `out_dir` configured for the selected `ANALYSIS_GROUP`:
 
-```text
-averaged_totalsphingolipids/new files/with_DMSO/with_dmso_analysis_outputs_Mar2026/
-```
-
-For the untreated group, outputs are written by default to:
-
-```text
-averaged_totalsphingolipids/new files/with untreated/with_untreated_analysis_outputs_Mar2026/
+```r
+out_dir = "path/to/your/output_directory"
 ```
 
 The script writes:

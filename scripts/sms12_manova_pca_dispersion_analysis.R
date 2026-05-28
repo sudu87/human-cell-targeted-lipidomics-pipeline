@@ -12,12 +12,20 @@ library(vegan)
 # - Runs MANOVA, PCA, scree/PCA plots, and betadisper dispersion checks
 # ==============================
 
-## ---- Configure input and outputs ----
-input_file <- "sms12_lipidomics/SMS1_2_Total lipids_no_19_test_file.xlsx"
-sheet_name <- "SMS1&2_Total lipids_uninfected"
+## ---- Configure user-defined input and output paths ----
+input_file <- "path/to/your/input_file.xlsx"
+sheet_name <- "your_sheet_name"
+output_dir <- "path/to/your/output_directory"
 
-out_dir <- "sms12_lipidomics/statistics"
-plot_dir <- "sms12_lipidomics"
+out_dir <- file.path(output_dir, "statistics")
+plot_dir <- output_dir
+
+if (!file.exists(input_file)) {
+  stop(
+    "Input file does not exist. Update input_file: ",
+    input_file
+  )
+}
 
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 dir.create(plot_dir, showWarnings = FALSE, recursive = TRUE)
