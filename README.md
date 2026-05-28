@@ -119,9 +119,15 @@ Typical outputs include:
 - dispersion test results
 - diagnostic plots
 
-## Notes
+## Input data availability
 
-Input data files are not included in this repository unless explicitly stated. Please ensure that file paths inside the scripts are adjusted to match your local data directory.
+Input data files are not included in this repository. They are deposited in Zenodo:
+
+Das, S., & Mohanty, A. (2026). *Targeted lipidomics analysis of sphingolipid metabolism during Simkania negevensis infection* (v.2) [Data set]. Zenodo. https://doi.org/10.5281/zenodo.18866967
+
+The Zenodo record is currently under embargo. Access to files may be restricted until the embargo is lifted.
+
+Please ensure that file paths inside the scripts are adjusted to match your local data directory.
 
 ## Contact
 
