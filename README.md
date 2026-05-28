@@ -114,8 +114,8 @@ Email: arpita.mohanty@uni-wuerzburg.de
 
 ## Citation
 
-If you use this repository or adapt the analysis workflow, please cite the related publication listed above.
+If you use this repository or adapt the analysis workflow, please cite the related publication. Citation metadata is available in [`CITATION.cff`](CITATION.cff), and GitHub will show a “Cite this repository” option for it.
 
 ## License
 
-Please add license information here, for example MIT, GPL-3, or institutional-use only.
+This repository is licensed under the Creative Commons Attribution 4.0 International License (CC BY 4.0). See [`LICENSE`](LICENSE) for details.
