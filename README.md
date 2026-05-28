@@ -27,14 +27,15 @@ The analysis workflow includes:
 
 ```text
 ├─ README.md
-├─ docs/
-│  ├─ heatmap_average_replicates.md
+├─ documents and instructions/
+│  ├─ transformation_diagnostics.md
+│  ├─ sms12_manova_pca_dispersion_analysis.md
 │  ├─ pairwise_fdr_lipid_heatmap.md
 │  └─ ...
 ├─ scripts/
-│  ├─ heatmap_average_replicates.R
+│  ├─ transformation_diagnostics.R
+│  ├─ sms12_manova_pca_dispersion_analysis.R
 │  ├─ pairwise_fdr_lipid_heatmap.R
-│  ├─ permanova_inhibitor_analysis.R
 │  └─ ...
 └─ images/
    ├─ hist_raw_values.png
@@ -47,43 +48,63 @@ The analysis workflow includes:
 
 Before running the analysis scripts, make sure that R and the required packages are installed.
 
-Recommended R packages include:
+Required CRAN packages used across the scripts include:
 
 ```r
-tidyverse
-pheatmap
-vegan
-ggplot2
 readxl
 janitor
+dplyr
+stringr
+purrr
+tidyr
+tibble
+ggplot2
+pheatmap
+vegan
+emmeans
+broom
+writexl
+rcompanion
 ```
 
 Install missing packages with:
 
 ```r
 install.packages(c(
-  "tidyverse",
+  "readxl",
+  "janitor",
+  "dplyr",
+  "stringr",
+  "purrr",
+  "tidyr",
+  "tibble",
+  "ggplot2",
   "pheatmap",
   "vegan",
-  "ggplot2",
-  "readxl",
-  "janitor"
+  "emmeans",
+  "broom",
+  "writexl",
+  "rcompanion"
 ))
 ```
+
+The `tools` package ships with R and is loaded by scripts that need it.
 
 ## Running the analysis
 
 Scripts are located in the `scripts/` directory. Each script performs a specific part of the lipidomics workflow.
 
+Each script is intended to run as a standalone analysis file after you install the required packages listed above and update the user-defined input/output paths near the top of the script. The scripts load their own libraries with `library()` calls, so you do not need to source another project file first.
+
 For example:
 
 ```r
-source("scripts/heatmap_average_replicates.R")
+source("scripts/transformation_diagnostics.R")
 source("scripts/pairwise_fdr_lipid_heatmap.R")
-source("scripts/permanova_inhibitor_analysis.R")
+source("scripts/sms12_manova_pca_dispersion_analysis.R")
 ```
 
-Detailed explanations of selected workflows are provided in the `docs/` directory.
+Detailed explanations of selected workflows are provided in the `documents and instructions/` directory.
 
 ## Outputs
 
