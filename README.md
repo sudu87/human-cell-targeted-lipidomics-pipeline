@@ -4,7 +4,7 @@
 
 ## Related publication
 
-**Chlamydia-like Bacterium _Simkania negevensis_ Exploits Host Sphingolipids during Infection**
+**Chlamydia-like bacterium Simkania negevensis exploits host sphingolipid salvage pathway and sphingomyelin synthesis during infection**
 
 Mohanty, A., Weinrich, J. D., Schumacher, F., Rühling, M., Sunuwar, S., Szegedi, H., Wigger, D., Schmelz, F., Panda, B. K., Kappe, C., Brenner, D., Schirmer, M., Arenz, C., Seibel, J., Holthuis, J. C. M., Das, S., Fraunholz, M., Kleuser, B., and Kozjak-Pavlovic, V.
 
