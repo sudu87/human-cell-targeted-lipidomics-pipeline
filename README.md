@@ -71,9 +71,17 @@ emmeans
 broom
 writexl
 rcompanion
+scales
 ```
 
-Install missing packages with:
+For a reproducible package environment, use the versions recorded in [`renv.lock`](renv.lock):
+
+```r
+install.packages("renv")
+renv::restore()
+```
+
+Alternatively, install missing packages manually with:
 
 ```r
 install.packages(c(
@@ -90,7 +98,8 @@ install.packages(c(
   "emmeans",
   "broom",
   "writexl",
-  "rcompanion"
+  "rcompanion",
+  "scales"
 ))
 ```
 
