@@ -27,6 +27,7 @@ The analysis workflow includes:
 
 ```text
 ├─ README.md
+├─ REPRODUCIBILITY.md
 ├─ CITATION.cff
 ├─ LICENSE
 ├─ documents and instructions/
@@ -120,6 +121,8 @@ source("scripts/sms12_manova_pca_dispersion_analysis.R")
 ```
 
 Detailed explanations of selected workflows are provided in the `documents and instructions/` directory.
+
+For step-by-step reproducibility instructions, including Zenodo input-file mapping and example run commands, see [`REPRODUCIBILITY.md`](REPRODUCIBILITY.md).
 
 ## Input data availability
 
