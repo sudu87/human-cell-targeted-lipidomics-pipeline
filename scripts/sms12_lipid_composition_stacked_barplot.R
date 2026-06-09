@@ -201,9 +201,9 @@ p_stack_inf <- ggplot(
   facet_wrap(~ infection_label, nrow = 1) +
   scale_y_continuous(
     labels = percent_format(accuracy = 1),
-    limits = c(0, 1),
     expand = expansion(mult = c(0, 0))
   ) +
+  coord_cartesian(ylim = c(0, 1)) +
   scale_fill_manual(
     values = lipid_palette[lipids_present],
     labels = lipid_labels[lipids_present],

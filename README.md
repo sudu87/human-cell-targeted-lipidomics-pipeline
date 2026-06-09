@@ -30,6 +30,9 @@ The analysis workflow includes:
 ├─ REPRODUCIBILITY.md
 ├─ CITATION.cff
 ├─ LICENSE
+├─ demo_data/
+│  ├─ README.md
+│  └─ sms12_demo_lipidomics.xlsx
 ├─ documents and instructions/
 │  ├─ transformation_diagnostics.md
 │  ├─ sms12_manova_pca_dispersion_analysis.md
@@ -124,9 +127,11 @@ Detailed explanations of selected workflows are provided in the `documents and i
 
 For step-by-step reproducibility instructions, including Zenodo input-file mapping and example run commands, see [`REPRODUCIBILITY.md`](REPRODUCIBILITY.md).
 
+A small synthetic demo workbook is provided in [`demo_data/`](demo_data/) for installation checks and reviewer testing.
+
 ## Input data availability
 
-Input data files are not included in this repository. They are deposited in Zenodo:
+Primary experimental input data files are not included in this repository. They are deposited in Zenodo:
 
 Das, S., & Mohanty, A. (2026). *Targeted lipidomics analysis of sphingolipid metabolism during Simkania negevensis infection* (v.2) [Data set]. Zenodo. https://doi.org/10.5281/zenodo.18866967
 

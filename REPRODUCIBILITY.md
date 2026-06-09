@@ -40,7 +40,78 @@ human-cell-targeted-lipidomics-pipeline/
 
 The `data/` and `outputs/` directories are local working directories. Input data are not tracked in this GitHub repository.
 
-## 4. Configure Script Paths
+## 4. Demo Dataset
+
+The repository includes a small synthetic demo workbook:
+
+```text
+demo_data/sms12_demo_lipidomics.xlsx
+```
+
+It can be regenerated with:
+
+```sh
+Rscript scripts/create_demo_datasets.R
+```
+
+The workbook contains:
+
+- `sms12_total_demo`: raw SMS1/2-style total lipid data
+- `sms12_individual_demo`: raw SMS1/2-style individual lipid data
+- `pairwise_total_demo`: pairwise contrast results for total lipids
+- `pairwise_individual_demo`: pairwise contrast results for individual lipids
+
+These data are synthetic and are provided only for testing installation, file paths, and script execution. They should not be interpreted biologically.
+
+To run a quick SMS1/2 total-lipid demo, configure relevant scripts with:
+
+```r
+input_file <- "demo_data/sms12_demo_lipidomics.xlsx"
+sheet_name <- "sms12_total_demo"
+output_dir <- "outputs/demo_sms12_total"
+```
+
+Then run, for example:
+
+```sh
+Rscript scripts/transformation_diagnostics.R
+Rscript scripts/sms12_manova_pca_dispersion_analysis.R
+Rscript scripts/sms12_lipid_summary_barplots.R
+Rscript scripts/sms12_lipid_composition_stacked_barplot.R
+Rscript scripts/sms12_ordered_condition_heatmap.R
+```
+
+For the individual-lipid PERMANOVA demo, use:
+
+```r
+input_file <- "demo_data/sms12_demo_lipidomics.xlsx"
+sheet_name <- "sms12_individual_demo"
+output_dir <- "outputs/demo_sms12_individual"
+```
+
+and run:
+
+```sh
+Rscript scripts/sms12_individual_lipids_permanova_dispersion_analysis.R
+```
+
+For the pairwise heatmap demo, configure `scripts/custom_pairwise_lipid_contrast_heatmap.R` with:
+
+```r
+input_file <- "demo_data/sms12_demo_lipidomics.xlsx"
+sheet_name <- "pairwise_individual_demo"
+output_dir <- "outputs/demo_pairwise_individual"
+```
+
+Then run:
+
+```sh
+Rscript scripts/custom_pairwise_lipid_contrast_heatmap.R
+```
+
+Expected demo outputs include diagnostic PNG files, PCA PDFs/CSVs, heatmaps, MANOVA/PERMANOVA text summaries, and plot-data CSV files in the configured `outputs/` subdirectories. Runtime is expected to be seconds to a few minutes on a normal desktop computer after package installation is complete.
+
+## 5. Configure Script Paths
 
 Each R script is standalone. Before running a script, open it and edit the user-defined paths near the top.
 
@@ -56,7 +127,7 @@ Some scripts use `file_path`, `out_dir`, or an `analysis_configs` list instead o
 
 Use exact sheet names from the Excel workbooks. The scripts apply `janitor::clean_names()` to column names, but they do not change sheet names.
 
-## 5. Suggested Data-To-Script Mapping
+## 6. Suggested Data-To-Script Mapping
 
 These are the main Zenodo files expected by the current scripts.
 
@@ -64,6 +135,9 @@ These are the main Zenodo files expected by the current scripts.
 | --- | --- | --- |
 | HeLa/HUVEC total sphingolipids | `1. Raw data_HUVEC_Hela-Total Sphingolipids.xlsx` | `pca_permanova_hela_huvec_analysis.R`, `cell_line_averaged_lipid_heatmap_analysis.R` |
 | HeLa/HUVEC individual sphingolipids | `2. Raw data_HUVEC_Hela-individual sphingolipids.xlsx` | `cell_line_averaged_lipid_heatmap_analysis.R` |
+| Demo SMS1/2 total lipids | `demo_data/sms12_demo_lipidomics.xlsx`, sheet `sms12_total_demo` | `sms12_manova_pca_dispersion_analysis.R`, `sms12_lipid_summary_barplots.R`, `sms12_lipid_composition_stacked_barplot.R`, `sms12_ordered_condition_heatmap.R`, `transformation_diagnostics.R` |
+| Demo SMS1/2 individual lipids | `demo_data/sms12_demo_lipidomics.xlsx`, sheet `sms12_individual_demo` | `sms12_individual_lipids_permanova_dispersion_analysis.R`, `transformation_diagnostics.R` |
+| Demo SMS1/2 pairwise contrasts | `demo_data/sms12_demo_lipidomics.xlsx`, sheet `pairwise_individual_demo` | `custom_pairwise_lipid_contrast_heatmap.R` |
 | SMS1/2 total lipids | `29. Raw data_R_SMS1&2_TotalSL.xlsx` | `sms12_manova_pca_dispersion_analysis.R`, `sms12_lipid_summary_barplots.R`, `sms12_lipid_composition_stacked_barplot.R`, `sms12_ordered_condition_heatmap.R`, `sms12_per_lipid_anova_posthoc_analysis.R`, `transformation_diagnostics.R` |
 | SMS1/2 individual lipids | `31. Raw data_R_SMS1&2_IndividualSL.xlsx` | `sms12_individual_lipids_permanova_dispersion_analysis.R`, `sms12_per_lipid_anova_posthoc_analysis.R`, `transformation_diagnostics.R` |
 | SMS1/2 total pairwise contrasts | `30. Pairwise comparasion_ SMS1:2_ Total SL.xlsx` | `custom_pairwise_lipid_contrast_heatmap.R` |
@@ -73,7 +147,7 @@ These are the main Zenodo files expected by the current scripts.
 | Inhibitor total pairwise contrasts | `12. Pairwise comparasion_ARC39_posthoc inhibitor contrasts by infection_Total SL.xlsx`, `13. Pairwise comparasion_Desipramine_posthoc inhibitor contrasts by infection_Total SL.xlsx`, `14. Pairwise comparasion_HPA-12_posthoc inhibitor contrasts by infection_Total SL.xlsx`, `15. Pairwise comparasion_Myriocin_posthoc inhibitor contrasts by infection_Total SL.xlsx`, `16. Pairwise comparasion_AKS466_posthoc inhibitor contrasts by infection_Total SL.xlsx` | `pairwise_fdr_lipid_heatmap.R`, `custom_pairwise_lipid_contrast_heatmap.R` |
 | Inhibitor individual pairwise contrasts | `24. Pairwise comparasion_ARC39_posthoc inhibitor contrasts by infection_Individual SL.xlsx`, `25. Pairwise comparasion_Desipramine_posthoc inhibitor contrasts by infection_Individual SL.xlsx`, `26. Pairwise comparasion_HPA-12_posthoc inhibitor contrasts by infection_Individual SL.xlsx`, `27. Pairwise comparasion_Myriocin_posthoc inhibitor contrasts by infection_Individual SL.xlsx`, `28. Pairwise comparasion_AKS466_posthoc inhibitor contrasts by infection_Individual SL.xlsx` | `pairwise_fdr_lipid_heatmap.R`, `custom_pairwise_lipid_contrast_heatmap.R` |
 
-## 6. Run Scripts
+## 7. Run Scripts
 
 Run scripts from the repository root. For example:
 
@@ -89,7 +163,7 @@ Rscript scripts/custom_pairwise_lipid_contrast_heatmap.R
 
 There is no single mandatory order for every script. Most scripts start from raw Excel data or pairwise contrast tables and can be run independently once their input path, sheet name, and output directory are set.
 
-## 7. Recommended SMS1/2 Run
+## 8. Recommended SMS1/2 Run
 
 For the SMS1/2 total lipid workflow, configure these scripts with:
 
@@ -144,7 +218,7 @@ Then run:
 Rscript scripts/custom_pairwise_lipid_contrast_heatmap.R
 ```
 
-## 8. Check Outputs
+## 9. Check Outputs
 
 Each script writes files to the configured output directory. Typical outputs include:
 
@@ -158,7 +232,7 @@ Each script writes files to the configured output directory. Typical outputs inc
 
 Keep output directories separate by analysis so that files from different workflows do not overwrite each other.
 
-## 9. Record Provenance
+## 10. Record Provenance
 
 For a fully reproducible rerun, record:
 
@@ -177,4 +251,3 @@ The current Git commit can be recorded with:
 ```sh
 git rev-parse HEAD
 ```
-
