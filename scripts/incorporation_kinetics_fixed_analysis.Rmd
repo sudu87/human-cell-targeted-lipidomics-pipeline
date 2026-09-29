@@ -1,0 +1,885 @@
+---
+title: "Fixed-effects analysis of isotope-incorporation kinetics"
+date: "2026-09-09"
+output: md_document
+---
+
+This report uses the corrected combined d3-palmitate and d7-dhSph incorporation workbook. The stored fractional-incorporation measurements are multiplied by 100 only for presentation as percent incorporation. The underlying incorporation metric is not recalculated.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+input_xlsx <- Sys.getenv(
+  "INCORPORATION_XLSX",
+  unset = file.path("data", "10. Final Incorporation rate _ Normalized to each class total SL_d3-pal and d7-dhsph_AP_5-09-2026.xlsx")
+)
+output_dir <- Sys.getenv(
+  "KINETIC_OUTPUT_DIR",
+  unset = file.path("outputs", "isotope_incorporation_kinetics")
+)
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+trajectory_dir <- file.path(output_dir, "fitted_trajectories")
+diagnostic_dir <- file.path(output_dir, "diagnostic_plots")
+dir.create(trajectory_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(diagnostic_dir, recursive = TRUE, showWarnings = FALSE)
+
+if (!requireNamespace("readxl", quietly = TRUE)) stop("The readxl package is required.")
+
+time_levels <- c(0.5, 1, 2, 4, 8)
+blue <- "#0000FF"
+red <- "#FF0000"
+group_colours <- c(Uninfected = blue, Infected = red)
+group_symbols <- c(Uninfected = 16, Infected = 15)
+mean_point_cex <- 2.0
+axis_line_lwd <- 7.0
+axis_tick_lwd <- 3.5
+text_scale <- 2.0
+axis_text_cex <- 1.0 * text_scale
+axis_text_font <- 2
+axis_label_cex <- 0.7 * axis_text_cex
+title_cex <- 0.7 * text_scale
+title_font <- 2
+legend_cex <- 0.82 * text_scale
+fdr_cex <- 1.0 * text_scale
+group_display_labels <- c(Uninfected = "-Sne", Infected = "+Sne")
+
+format_axis_labels <- function(x) {
+  labels <- ifelse(
+    abs(x - round(x)) < .Machine$double.eps^0.5,
+    as.character(as.integer(round(x))),
+    sprintf("%.1f", x)
+  )
+  sub("\\.0$", "", labels)
+}
+
+y_axis_overrides <- list(
+  d7_SMS_SM = list(limits = c(0, 3.0), breaks = seq(0, 3.0, by = 1)),
+  d3_LacCerS_LacCer = list(limits = c(0, 4.0), breaks = seq(0, 4.0, by = 1.0)),
+  d7_LacCerS_LacCer = list(limits = c(0, 2.0), breaks = seq(0, 2.0, by = 1.0))
+)
+
+get_y_axis_settings <- function(endpoint_id, default_limits) {
+  override <- y_axis_overrides[[endpoint_id]]
+  if (is.null(override)) {
+    y_upper_needed <- max(0, default_limits, na.rm = TRUE)
+    if (!is.finite(y_upper_needed) || y_upper_needed <= 0) y_upper_needed <- 1
+
+    breaks <- pretty(c(0, y_upper_needed), n = 5)
+    breaks <- breaks[breaks >= 0]
+    if (length(breaks) == 0) breaks <- c(0, y_upper_needed)
+    if (max(breaks) < y_upper_needed) {
+      step <- if (length(breaks) >= 2) {
+        tail(breaks, 1) - tail(breaks, 2)[1]
+      } else {
+        y_upper_needed
+      }
+      breaks <- c(breaks, max(breaks) + step)
+    }
+    breaks <- unique(breaks)
+    return(list(
+      limits = c(0, max(breaks)),
+      breaks = breaks,
+      labels = format_axis_labels(breaks)
+    ))
+  }
+  list(
+    limits = c(override$limits[1], tail(override$breaks, 1)),
+    breaks = override$breaks,
+    labels = format_axis_labels(override$breaks)
+  )
+}
+
+draw_prism_axes <- function(x_at, x_labels, y_at = NULL, y_labels = NULL) {
+  usr <- par("usr")
+  segments(usr[1], usr[3], usr[2], usr[3], col = "black", lwd = axis_line_lwd)
+  segments(usr[1], usr[3], usr[1], usr[4], col = "black", lwd = axis_line_lwd)
+  axis(1, at = x_at, labels = x_labels, col = "black", col.ticks = "black",
+       lwd = 0, lwd.ticks = axis_tick_lwd, cex.axis = axis_text_cex,
+       font = axis_text_font, gap.axis = -1)
+  if (is.null(y_at)) {
+    axis(2, las = 1, col = "black", col.ticks = "black",
+         lwd = 0, lwd.ticks = axis_tick_lwd, cex.axis = axis_text_cex,
+         font = axis_text_font)
+  } else {
+    axis(2, at = y_at, labels = y_labels, las = 1,
+         col = "black", col.ticks = "black",
+         lwd = 0, lwd.ticks = axis_tick_lwd, cex.axis = axis_text_cex,
+         font = axis_text_font)
+  }
+}
+
+draw_t_error_bars <- function(x, ymin, ymax, col, width = 0.06, lwd = 2.5) {
+  arrows(
+    x0 = x, y0 = ymin, x1 = x, y1 = ymax,
+    angle = 90, code = 3, length = width,
+    col = col, lwd = lwd
+  )
+}
+
+draw_group_legend <- function() {
+  usr <- par("usr")
+  old_xpd <- par("xpd")
+  on.exit(par(xpd = old_xpd), add = TRUE)
+  par(xpd = NA)
+  legend(
+    x = usr[2] + 0.005 * diff(usr[1:2]),
+    y = usr[4],
+    legend = unname(group_display_labels[c("Uninfected", "Infected")]),
+    col = c(blue, red),
+    lwd = 2.5,
+    pch = c(group_symbols[["Uninfected"]], group_symbols[["Infected"]]),
+    pt.cex = mean_point_cex,
+    seg.len = 1.2,
+    x.intersp = 0.8,
+    bty = "n",
+    cex = legend_cex,
+    xjust = 0,
+    yjust = 1
+  )
+}
+
+fmt_p <- function(p) {
+  if (is.na(p)) return("NA")
+  if (p < 0.001) return("<0.001")
+  sprintf("%.3f", p)
+}
+
+fmt_fdr <- function(p) {
+  if (is.na(p)) return("FDR = NA")
+  if (p < 0.001) return("FDR < 0.001")
+  paste0("FDR = ", sprintf("%.3f", p))
+}
+
+safe_name <- function(x) {
+  x <- gsub("[^A-Za-z0-9]+", "_", x)
+  gsub("^_|_$", "", x)
+}
+
+meta_d3 <- data.frame(
+  tracer = "d3-palmitate",
+  sheet = "d3- Palmitate_ IR",
+  source_endpoint = c(
+    "Labelled d3-dhsph Incorporation rate (SPT)",
+    "Labelled (d3+d6) dhCer Incorporation rate (CerS)",
+    "Labelled (d3+d6) Cer Incorporation rate (DES)",
+    "Labelled (d3+d6) dhSM Incorporation rate (SMS)",
+    "Labelled (d3+d6) SM Incorporation rate (SMS)",
+    "Labelled d3-sph Incorporation rate (AC)",
+    "Labelled (d3+d6) HexCer Incorporation rate (GCS)",
+    "Labelled (d3+d6) LacCer Incorporation rate (LacCerS)"
+  ),
+  endpoint_id = c(
+    "d3_SPT_dhSph", "d3_CerS_dhCer", "d3_DES_Cer", "d3_SMS_dhSM",
+    "d3_SMS_SM", "d3_AC_Sph", "d3_GCS_HexCer", "d3_LacCerS_LacCer"
+  ),
+  display_endpoint = c(
+    "SPT-linked d3-dhSph", "CerS-linked labelled dhCer", "DES-linked labelled Cer",
+    "SMS-linked labelled dhSM", "SMS-linked labelled SM", "AC-linked d3-Sph",
+    "GCS-linked labelled HexCer", "LacCerS-linked labelled LacCer"
+  ),
+  primary_endpoint = TRUE,
+  stringsAsFactors = FALSE
+)
+
+meta_d7 <- data.frame(
+  tracer = "d7-dhSph",
+  sheet = "d7-dhSph_IR",
+  source_endpoint = c(
+    "Labelled d7-dhsph Incorporation rate (SPT)",
+    "Labelled d7 dhCer Incorporation rate (CerS)",
+    "Labelled d7 Cer Incorporation rate (DES)",
+    "Labelled d7 dhSM Incorporation rate (SMS)",
+    "Labelled d7 SM Incorporation rate (SMS)",
+    "Labelled d7 HexCer Incorporation rate (GCS)",
+    "Labelled d7 LacCer Incorporation rate (LacCerS)",
+    "Labelled d7-sph Incorporation rate (AC)",
+    "Labelled d7-S1P Incorporation rate (SpK)"
+  ),
+  endpoint_id = c(
+    "d7_precursor_dhSph", "d7_CerS_dhCer", "d7_DES_Cer", "d7_SMS_dhSM",
+    "d7_SMS_SM", "d7_GCS_HexCer", "d7_LacCerS_LacCer", "d7_AC_Sph", "d7_SpK_S1P"
+  ),
+  display_endpoint = c(
+    "d7-dhSph precursor-pool labelling", "CerS-linked d7-dhCer", "DES-linked d7-Cer",
+    "SMS-linked d7-dhSM", "SMS-linked d7-SM", "GCS-linked d7-HexCer",
+    "LacCerS-linked d7-LacCer", "AC-linked d7-Sph", "SpK-linked d7-S1P"
+  ),
+  primary_endpoint = c(FALSE, rep(TRUE, 8)),
+  stringsAsFactors = FALSE
+)
+
+endpoint_meta <- rbind(meta_d3, meta_d7)
+endpoint_meta$plot_index <- seq_len(nrow(endpoint_meta))
+endpoint_meta$plot_file <- sprintf(
+  "%02d_%s.pdf", endpoint_meta$plot_index,
+  vapply(endpoint_meta$endpoint_id, safe_name, character(1))
+)
+
+plot_endpoint_meta <- endpoint_meta[endpoint_meta$endpoint_id != "d7_precursor_dhSph", , drop = FALSE]
+plot_endpoint_meta$plot_index <- seq_len(nrow(plot_endpoint_meta))
+plot_endpoint_meta$plot_file <- sprintf(
+  "%02d_%s.pdf", plot_endpoint_meta$plot_index,
+  vapply(plot_endpoint_meta$endpoint_id, safe_name, character(1))
+)
+
+extract_match <- function(x, pattern) {
+  hit <- regexpr(pattern, x, perl = TRUE)
+  out <- rep(NA_character_, length(x))
+  ok <- hit > 0
+  out[ok] <- regmatches(x, hit)[ok]
+  out
+}
+
+read_tracer_sheet <- function(meta) {
+  sheet_name <- unique(meta$sheet)
+  tracer_name <- unique(meta$tracer)
+  tracer_pattern <- if (tracer_name == "d3-palmitate") "d3-Palmitate" else "d7-dhSph"
+  x <- readxl::read_excel(input_xlsx, sheet = sheet_name)
+
+  if (!identical(names(x)[1], "Würzburg sample ID")) {
+    stop(sprintf("The first column of '%s' must be 'Würzburg sample ID'.", sheet_name))
+  }
+  missing_endpoints <- setdiff(meta$source_endpoint, names(x))
+  if (length(missing_endpoints)) {
+    stop(sprintf("Missing expected columns in '%s': %s", sheet_name, paste(missing_endpoints, collapse = "; ")))
+  }
+
+  sample_ids_all <- as.character(x[["Würzburg sample ID"]])
+  tracer_rows <- grepl(tracer_pattern, sample_ids_all, fixed = TRUE)
+  control_rows <- !tracer_rows
+  endpoint_all <- as.data.frame(lapply(x[meta$source_endpoint], as.numeric), check.names = FALSE)
+
+  qc <- data.frame(
+    tracer = tracer_name,
+    sheet = sheet_name,
+    total_rows = nrow(x),
+    tracer_rows = sum(tracer_rows),
+    no_label_control_rows = sum(control_rows),
+    duplicate_sample_ids = sum(duplicated(sample_ids_all)),
+    missing_or_nonfinite_endpoint_cells = sum(!is.finite(as.matrix(endpoint_all))),
+    values_outside_zero_to_one = sum(as.matrix(endpoint_all) < 0 | as.matrix(endpoint_all) > 1, na.rm = TRUE),
+    nonzero_control_cells = sum(as.matrix(endpoint_all[control_rows, , drop = FALSE]) != 0, na.rm = TRUE),
+    stringsAsFactors = FALSE
+  )
+
+  x <- x[tracer_rows, , drop = FALSE]
+  sample_ids <- sample_ids_all[tracer_rows]
+  time_text <- extract_match(sample_ids, "(0\\.5|1|2|4|8)h")
+  replicate_text <- extract_match(sample_ids, "R[123]")
+  design <- data.frame(
+    sample_name = sample_ids,
+    infection = factor(
+      ifelse(grepl("Sne", sample_ids, fixed = TRUE), "Infected", "Uninfected"),
+      levels = c("Uninfected", "Infected")
+    ),
+    time_h = as.numeric(sub("h", "", time_text, fixed = TRUE)),
+    replicate = factor(replicate_text, levels = c("R1", "R2", "R3")),
+    stringsAsFactors = FALSE
+  )
+
+  if (nrow(design) != 30L) stop(sprintf("Expected 30 tracer rows in '%s'; found %d.", sheet_name, nrow(design)))
+  if (anyNA(design$time_h) || anyNA(design$replicate)) stop(sprintf("Could not parse every time/replicate in '%s'.", sheet_name))
+  design_counts <- table(design$infection, design$time_h)
+  if (!all(dim(design_counts) == c(2L, 5L)) || any(design_counts != 3L)) {
+    stop(sprintf("Incomplete infection-by-time design in '%s'.", sheet_name))
+  }
+
+  long_rows <- lapply(seq_len(nrow(meta)), function(i) {
+    m <- meta[i, , drop = FALSE]
+    data.frame(
+      tracer = tracer_name,
+      endpoint_id = m$endpoint_id,
+      display_endpoint = m$display_endpoint,
+      source_endpoint = m$source_endpoint,
+      primary_endpoint = m$primary_endpoint,
+      sample_name = design$sample_name,
+      infection = design$infection,
+      time_h = design$time_h,
+      replicate = design$replicate,
+      incorporation_fraction = as.numeric(x[[m$source_endpoint]]),
+      stringsAsFactors = FALSE
+    )
+  })
+  out <- do.call(rbind, long_rows)
+  out$infection <- factor(out$infection, levels = c("Uninfected", "Infected"))
+  out$replicate <- factor(out$replicate, levels = c("R1", "R2", "R3"))
+  out$incorporation_percent <- 100 * out$incorporation_fraction
+  out$time_c <- out$time_h - 0.5
+  out$log2_time_c <- log2(out$time_h) - log2(0.5)
+  out$time_factor <- factor(out$time_h, levels = time_levels)
+  list(data = out, qc = qc)
+}
+
+d3_import <- read_tracer_sheet(meta_d3)
+d7_import <- read_tracer_sheet(meta_d7)
+analysis_data <- rbind(d3_import$data, d7_import$data)
+input_qc <- rbind(d3_import$qc, d7_import$qc)
+
+if (any(!is.finite(analysis_data$incorporation_fraction))) stop("Non-finite incorporation value found.")
+if (any(analysis_data$incorporation_fraction < 0 | analysis_data$incorporation_fraction > 1)) stop("Incorporation fraction outside 0-1.")
+
+write.csv(analysis_data, file.path(output_dir, "incorporation_observations_used.csv"), row.names = FALSE)
+write.csv(input_qc, file.path(output_dir, "input_quality_control.csv"), row.names = FALSE)
+
+group_summary_raw <- aggregate(
+  incorporation_percent ~ tracer + endpoint_id + display_endpoint + primary_endpoint + infection + time_h,
+  data = analysis_data,
+  FUN = function(x) c(mean = mean(x), sd = sd(x), n = length(x))
+)
+group_summary <- data.frame(
+  tracer = group_summary_raw$tracer,
+  endpoint_id = group_summary_raw$endpoint_id,
+  display_endpoint = group_summary_raw$display_endpoint,
+  primary_endpoint = group_summary_raw$primary_endpoint,
+  infection = group_summary_raw$infection,
+  time_h = group_summary_raw$time_h,
+  mean_percent = group_summary_raw$incorporation_percent[, "mean"],
+  sd_percent = group_summary_raw$incorporation_percent[, "sd"],
+  n = group_summary_raw$incorporation_percent[, "n"],
+  stringsAsFactors = FALSE
+)
+group_summary <- group_summary[order(group_summary$tracer, group_summary$endpoint_id, group_summary$infection, group_summary$time_h), ]
+write.csv(group_summary, file.path(output_dir, "incorporation_group_summary.csv"), row.names = FALSE)
+
+fixed_formula <- function(model_type, full = TRUE) {
+  if (model_type == "linear_time") {
+    if (full) incorporation_percent ~ infection * time_c else incorporation_percent ~ infection + time_c
+  } else if (model_type == "log2_time") {
+    if (full) incorporation_percent ~ infection * log2_time_c else incorporation_percent ~ infection + log2_time_c
+  } else if (model_type == "natural_spline_df2") {
+    if (full) incorporation_percent ~ infection * splines::ns(time_h, df = 2) else incorporation_percent ~ infection + splines::ns(time_h, df = 2)
+  } else if (model_type == "categorical_time") {
+    if (full) incorporation_percent ~ infection * time_factor else incorporation_percent ~ infection + time_factor
+  } else {
+    stop("Unknown model type: ", model_type)
+  }
+}
+
+fit_lm <- function(d, model_type, full = TRUE) {
+  lm(fixed_formula(model_type, full = full), data = d)
+}
+
+lack_of_fit_p <- function(model, categorical_model) {
+  as.numeric(anova(model, categorical_model)$"Pr(>F)"[2])
+}
+
+interaction_p_lm <- function(d, model_type) {
+  reduced <- fit_lm(d, model_type, full = FALSE)
+  full <- fit_lm(d, model_type, full = TRUE)
+  as.numeric(anova(reduced, full)$"Pr(>F)"[2])
+}
+
+select_kinetic_model <- function(d) {
+  d <- droplevels(d)
+  model_types <- c("linear_time", "log2_time", "natural_spline_df2", "categorical_time")
+  models <- setNames(lapply(model_types, function(z) fit_lm(d, z, full = TRUE)), model_types)
+  lof <- c(
+    linear_time = lack_of_fit_p(models$linear_time, models$categorical_time),
+    log2_time = lack_of_fit_p(models$log2_time, models$categorical_time),
+    natural_spline_df2 = lack_of_fit_p(models$natural_spline_df2, models$categorical_time),
+    categorical_time = NA_real_
+  )
+  adequate <- is.na(lof) | lof >= 0.05
+  aic_linear <- AIC(models$linear_time)
+  aic_log2 <- AIC(models$log2_time)
+
+  if (adequate["linear_time"] && !adequate["log2_time"]) {
+    final_type <- "linear_time"
+    justification <- "Clock time was adequate whereas log2(time) was not."
+  } else if (!adequate["linear_time"] && adequate["log2_time"]) {
+    final_type <- "log2_time"
+    justification <- "log2(time) was adequate whereas clock time was not."
+  } else if (adequate["linear_time"] && adequate["log2_time"] && aic_log2 <= aic_linear - 2) {
+    final_type <- "log2_time"
+    justification <- "Both simple time scales were adequate and log2(time) had at least 2 AIC units of support."
+  } else if (adequate["linear_time"] || adequate["log2_time"]) {
+    final_type <- "linear_time"
+    justification <- "The simple models were adequate without clear AIC support for log2(time); clock time was retained for parsimony."
+  } else if (adequate["natural_spline_df2"]) {
+    final_type <- "natural_spline_df2"
+    justification <- "Both simple continuous-time models lacked fit; a two-degree-of-freedom natural spline removed detectable lack of fit."
+  } else {
+    final_type <- "categorical_time"
+    justification <- "Linear time, log2(time), and the low-complexity spline all lacked fit; unconstrained categorical time was retained."
+  }
+
+  list(
+    models = models,
+    lack_of_fit = lof,
+    adequate = adequate,
+    final_type = final_type,
+    final_model = models[[final_type]],
+    justification = justification
+  )
+}
+
+contrast_lm <- function(model, L, level = 0.95) {
+  b <- coef(model)
+  V <- vcov(model)
+  if (is.null(names(L))) names(L) <- names(b)
+  L <- L[names(b)]
+  estimate <- as.numeric(sum(L * b))
+  se <- as.numeric(sqrt(t(L) %*% V %*% L))
+  df <- df.residual(model)
+  statistic <- estimate / se
+  p_value <- 2 * pt(-abs(statistic), df = df)
+  critical <- qt(1 - (1 - level) / 2, df = df)
+  data.frame(
+    estimate = estimate, std_error = se, df = df, statistic = statistic,
+    p_value = p_value, conf_low = estimate - critical * se,
+    conf_high = estimate + critical * se
+  )
+}
+
+fixed_model_matrix <- function(model_type, newdata) {
+  model.matrix(delete.response(terms(fixed_formula(model_type, full = TRUE))), newdata)
+}
+
+newdata_contrast <- function(model, model_type, newdata_a, newdata_b) {
+  Xa <- fixed_model_matrix(model_type, newdata_a)
+  Xb <- fixed_model_matrix(model_type, newdata_b)
+  bnames <- names(coef(model))
+  L <- as.numeric(Xa[1, bnames, drop = TRUE] - Xb[1, bnames, drop = TRUE])
+  names(L) <- bnames
+  contrast_lm(model, L)
+}
+
+extract_slopes <- function(model, model_type) {
+  if (!model_type %in% c("linear_time", "log2_time")) return(NULL)
+  term_time <- if (model_type == "linear_time") "time_c" else "log2_time_c"
+  term_interaction <- paste0("infectionInfected:", term_time)
+  bnames <- names(coef(model))
+  L_u <- setNames(rep(0, length(bnames)), bnames)
+  L_i <- L_u
+  L_d <- L_u
+  L_u[term_time] <- 1
+  L_i[term_time] <- 1
+  L_i[term_interaction] <- 1
+  L_d[term_interaction] <- 1
+  list(
+    uninfected = contrast_lm(model, L_u),
+    infected = contrast_lm(model, L_i),
+    difference = contrast_lm(model, L_d)
+  )
+}
+
+model_fit_stats <- function(model) {
+  s <- summary(model)
+  c(R2 = unname(s$r.squared), adjusted_R2 = unname(s$adj.r.squared), residual_sd = unname(s$sigma))
+}
+
+prediction_frame <- function(model, model_type, times = NULL) {
+  if (is.null(times)) {
+    times <- if (model_type == "categorical_time") time_levels else seq(0.5, 8, length.out = 200)
+  }
+
+  nd <- expand.grid(
+    time_h = times,
+    infection = factor(c("Uninfected", "Infected"), levels = c("Uninfected", "Infected"))
+  )
+  nd$time_c <- nd$time_h - 0.5
+  nd$log2_time_c <- log2(nd$time_h) - log2(0.5)
+  nd$time_factor <- factor(nd$time_h, levels = time_levels)
+  X <- fixed_model_matrix(model_type, nd)
+  b <- coef(model)
+  X <- X[, names(b), drop = FALSE]
+  V <- vcov(model)
+  nd$fit <- as.numeric(X %*% b)
+  nd$se <- sqrt(pmax(0, diag(X %*% V %*% t(X))))
+  critical <- qt(0.975, df = df.residual(model))
+  nd$lwr <- nd$fit - critical * nd$se
+  nd$upr <- nd$fit + critical * nd$se
+  nd
+}
+
+model_label <- function(model_type) {
+  switch(
+    model_type,
+    linear_time = "Linear clock time",
+    log2_time = "Linear log2(time)",
+    natural_spline_df2 = "Natural spline (2 df)",
+    categorical_time = "Unconstrained categorical time"
+  )
+}
+
+fits <- list()
+comparison_rows <- list()
+coefficient_rows <- list()
+summary_rows <- list()
+diagnostic_rows <- list()
+prediction_rows <- list()
+
+for (endpoint_id in endpoint_meta$endpoint_id) {
+  d <- droplevels(analysis_data[analysis_data$endpoint_id == endpoint_id, ])
+  m <- endpoint_meta[endpoint_meta$endpoint_id == endpoint_id, , drop = FALSE]
+  fit_result <- select_kinetic_model(d)
+  fits[[endpoint_id]] <- fit_result
+
+  for (candidate in names(fit_result$models)) {
+    mod <- fit_result$models[[candidate]]
+    fit_stats <- model_fit_stats(mod)
+    comparison_rows[[length(comparison_rows) + 1L]] <- data.frame(
+      tracer = m$tracer,
+      endpoint_id = endpoint_id,
+      display_endpoint = m$display_endpoint,
+      candidate_model = candidate,
+      selected = candidate == fit_result$final_type,
+      AIC = AIC(mod),
+      BIC = BIC(mod),
+      log_likelihood = as.numeric(logLik(mod)),
+      lack_of_fit_vs_categorical_p = fit_result$lack_of_fit[candidate],
+      lack_of_fit_acceptable = fit_result$adequate[candidate],
+      R2 = fit_stats["R2"],
+      adjusted_R2 = fit_stats["adjusted_R2"],
+      stringsAsFactors = FALSE
+    )
+  }
+
+  final_model <- fit_result$final_model
+  interaction_p <- interaction_p_lm(d, fit_result$final_type)
+  fit_stats <- model_fit_stats(final_model)
+  standardized_residuals <- as.numeric(rstandard(final_model))
+  fitted_values <- as.numeric(fitted(final_model))
+  shapiro_p <- if (length(unique(standardized_residuals)) >= 3L) shapiro.test(standardized_residuals)$p.value else NA_real_
+  bp_aux <- lm(I(standardized_residuals^2) ~ fitted_values)
+  bp_stat <- nrow(d) * summary(bp_aux)$r.squared
+  bp_p <- pchisq(bp_stat, df = 1, lower.tail = FALSE)
+  cook <- cooks.distance(final_model)
+  cook_threshold <- 4 / nrow(d)
+  influential <- which(cook > cook_threshold)
+
+  baseline_u <- data.frame(
+    infection = factor("Uninfected", levels = c("Uninfected", "Infected")),
+    time_h = 0.5, time_c = 0, log2_time_c = 0,
+    time_factor = factor(0.5, levels = time_levels)
+  )
+  baseline_i <- baseline_u
+  baseline_i$infection <- factor("Infected", levels = c("Uninfected", "Infected"))
+  baseline_effect <- newdata_contrast(final_model, fit_result$final_type, baseline_i, baseline_u)
+  slopes <- extract_slopes(final_model, fit_result$final_type)
+
+  summary_rows[[length(summary_rows) + 1L]] <- data.frame(
+    tracer = m$tracer,
+    endpoint_id = endpoint_id,
+    display_endpoint = m$display_endpoint,
+    source_endpoint = m$source_endpoint,
+    primary_endpoint = m$primary_endpoint,
+    selected_model = fit_result$final_type,
+    selected_model_label = model_label(fit_result$final_type),
+    infection_by_time_interaction_p = interaction_p,
+    infection_effect_at_0_5h = baseline_effect$estimate,
+    infection_effect_at_0_5h_conf_low = baseline_effect$conf_low,
+    infection_effect_at_0_5h_conf_high = baseline_effect$conf_high,
+    infection_effect_at_0_5h_p = baseline_effect$p_value,
+    R2 = fit_stats["R2"],
+    adjusted_R2 = fit_stats["adjusted_R2"],
+    residual_sd = fit_stats["residual_sd"],
+    selection_justification = fit_result$justification,
+    slope_interpretation_valid = fit_result$final_type %in% c("linear_time", "log2_time"),
+    slope_uninfected = if (is.null(slopes)) NA_real_ else slopes$uninfected$estimate,
+    slope_infected = if (is.null(slopes)) NA_real_ else slopes$infected$estimate,
+    slope_difference = if (is.null(slopes)) NA_real_ else slopes$difference$estimate,
+    slope_difference_conf_low = if (is.null(slopes)) NA_real_ else slopes$difference$conf_low,
+    slope_difference_conf_high = if (is.null(slopes)) NA_real_ else slopes$difference$conf_high,
+    slope_difference_p = if (is.null(slopes)) NA_real_ else slopes$difference$p_value,
+    slope_unit = if (fit_result$final_type == "linear_time") "percentage points per hour" else if (fit_result$final_type == "log2_time") "percentage points per doubling of time" else NA_character_,
+    stringsAsFactors = FALSE
+  )
+
+  tt <- summary(final_model)$coefficients
+  ci <- confint(final_model)
+  coefficient_rows[[length(coefficient_rows) + 1L]] <- data.frame(
+    tracer = m$tracer,
+    endpoint_id = endpoint_id,
+    display_endpoint = m$display_endpoint,
+    selected_model = fit_result$final_type,
+    term = rownames(tt),
+    estimate = tt[, "Estimate"],
+    std_error = tt[, "Std. Error"],
+    df = df.residual(final_model),
+    statistic = tt[, "t value"],
+    p_value = tt[, "Pr(>|t|)"],
+    conf_low = ci[, 1],
+    conf_high = ci[, 2],
+    row.names = NULL,
+    stringsAsFactors = FALSE
+  )
+
+  diagnostic_rows[[length(diagnostic_rows) + 1L]] <- data.frame(
+    tracer = m$tracer,
+    endpoint_id = endpoint_id,
+    display_endpoint = m$display_endpoint,
+    selected_model = fit_result$final_type,
+    n_observations = nrow(d),
+    exact_zero_count = sum(d$incorporation_percent == 0),
+    Shapiro_Wilk_p = shapiro_p,
+    residual_normality_assessment = ifelse(!is.na(shapiro_p) && shapiro_p < 0.05, "Potential deviation", "Acceptable"),
+    Breusch_Pagan_like_p = bp_p,
+    variance_assessment = ifelse(!is.na(bp_p) && bp_p < 0.05, "Potential heteroscedasticity", "Acceptable"),
+    standardized_residual_count_abs_gt_2_5 = sum(abs(standardized_residuals) > 2.5),
+    approximate_Cooks_threshold = cook_threshold,
+    approximate_influential_observation_count = length(influential),
+    approximate_influential_sample_names = if (length(influential)) paste(d$sample_name[influential], collapse = "; ") else "None",
+    R2 = fit_stats["R2"],
+    adjusted_R2 = fit_stats["adjusted_R2"],
+    residual_sd = fit_stats["residual_sd"],
+    stringsAsFactors = FALSE
+  )
+
+  pred <- prediction_frame(final_model, fit_result$final_type)
+  pred$tracer <- m$tracer
+  pred$endpoint_id <- endpoint_id
+  pred$display_endpoint <- m$display_endpoint
+  pred$selected_model <- fit_result$final_type
+  prediction_rows[[length(prediction_rows) + 1L]] <- pred[, c(
+    "tracer", "endpoint_id", "display_endpoint", "selected_model",
+    "infection", "time_h", "fit", "se", "lwr", "upr"
+  )]
+}
+
+model_comparison <- do.call(rbind, comparison_rows)
+model_coefficients <- do.call(rbind, coefficient_rows)
+model_summary <- do.call(rbind, summary_rows)
+model_diagnostics <- do.call(rbind, diagnostic_rows)
+fitted_predictions <- do.call(rbind, prediction_rows)
+
+model_summary$interaction_p_adjusted_BH <- NA_real_
+for (tr in unique(model_summary$tracer)) {
+  idx <- model_summary$tracer == tr & model_summary$primary_endpoint
+  model_summary$interaction_p_adjusted_BH[idx] <- p.adjust(
+    model_summary$infection_by_time_interaction_p[idx], method = "BH"
+  )
+}
+model_summary$primary_conclusion <- ifelse(
+  !model_summary$primary_endpoint,
+  "Precursor-pool quality-control endpoint; excluded from the primary enzyme-linked multiplicity family.",
+  ifelse(
+    model_summary$interaction_p_adjusted_BH < 0.05,
+    "Evidence of an infection-dependent incorporation trajectory after BH correction.",
+    "No infection-dependent incorporation trajectory detected after BH correction."
+  )
+)
+
+write.csv(model_summary, file.path(output_dir, "kinetic_model_summary.csv"), row.names = FALSE)
+write.csv(model_comparison, file.path(output_dir, "kinetic_model_comparison.csv"), row.names = FALSE)
+write.csv(model_coefficients, file.path(output_dir, "kinetic_model_coefficients.csv"), row.names = FALSE)
+write.csv(model_diagnostics, file.path(output_dir, "kinetic_model_diagnostics.csv"), row.names = FALSE)
+write.csv(fitted_predictions, file.path(output_dir, "kinetic_model_fitted_predictions.csv"), row.names = FALSE)
+
+plot_trajectory <- function(d, fit_result, meta_row) {
+  model <- fit_result$final_model
+  model_type <- fit_result$final_type
+  pred <- prediction_frame(model, model_type)
+  pred_timepoints <- prediction_frame(model, model_type, times = time_levels)
+  point_summary <- group_summary[group_summary$endpoint_id == meta_row$endpoint_id, ]
+  summary_row <- model_summary[model_summary$endpoint_id == meta_row$endpoint_id, ]
+  y_min <- min(0, d$incorporation_percent, pred$lwr, na.rm = TRUE)
+  y_max <- max(d$incorporation_percent, pred$upr, na.rm = TRUE)
+  y_pad <- max(0.2, 0.18 * (y_max - y_min))
+  y_axis <- get_y_axis_settings(as.character(meta_row$endpoint_id), c(y_min, y_max + y_pad))
+
+  old_par <- par(no.readonly = TRUE)
+  on.exit(par(old_par), add = TRUE)
+  par(mar = c(8.0, 8.7, 6.3, 11.0), mgp = c(5.5, 1.6, 0))
+  plot(
+    NA, xlim = c(0.35, 8.15), ylim = y_axis$limits,
+    xlab = "Time after label addition (h)", ylab = "Fractional incorporation (%)",
+    main = meta_row$display_endpoint, axes = FALSE, frame.plot = FALSE,
+    xaxs = "i", yaxs = "i",
+    cex.lab = axis_label_cex, cex.main = title_cex, font.main = title_font
+  )
+  draw_prism_axes(
+    time_levels, c("0.5", "1", "2", "4", "8"),
+    y_at = y_axis$breaks, y_labels = y_axis$labels
+  )
+
+  for (grp in c("Uninfected", "Infected")) {
+    p <- pred[pred$infection == grp, ]
+    p_timepoints <- pred_timepoints[pred_timepoints$infection == grp, ]
+    col <- group_colours[[grp]]
+
+    if (model_type == "natural_spline_df2") {
+      polygon(
+        c(p$time_h, rev(p$time_h)), c(p$lwr, rev(p$upr)),
+        col = grDevices::adjustcolor(col, alpha.f = 0.17), border = NA
+      )
+      lines(p$time_h, p$fit, col = col, lwd = 2.5)
+      next
+    }
+
+    lines(p$time_h, p$fit, col = col, lwd = 2.5)
+    draw_t_error_bars(p_timepoints$time_h, p_timepoints$lwr, p_timepoints$upr, col = col)
+  }
+
+  for (grp in c("Uninfected", "Infected")) {
+    p <- point_summary[as.character(point_summary$infection) == grp, ]
+    points(
+      p$time_h, p$mean_percent,
+      pch = group_symbols[[grp]], col = group_colours[[grp]], cex = mean_point_cex
+    )
+  }
+  draw_group_legend()
+
+  note <- if (summary_row$primary_endpoint) fmt_fdr(summary_row$interaction_p_adjusted_BH) else "FDR = NA"
+  usr <- par("usr")
+  text(
+    usr[2] - 0.015 * diff(usr[1:2]),
+    usr[4] - 0.020 * diff(usr[3:4]),
+    labels = note, adj = c(1, 1), cex = fdr_cex
+  )
+}
+
+plot_diagnostics <- function(d, fit_result, meta_row) {
+  model <- fit_result$final_model
+  r <- as.numeric(rstandard(model))
+  f <- as.numeric(fitted(model))
+  old_par <- par(no.readonly = TRUE)
+  on.exit(par(old_par), add = TRUE)
+  par(
+    mfrow = c(2, 2), mar = c(5.0, 5.0, 4.0, 1.0), oma = c(0, 0, 4.0, 0),
+    cex.axis = axis_text_cex, cex.lab = axis_label_cex, cex.main = title_cex,
+    font.axis = axis_text_font, font.main = title_font
+  )
+  plot(f, r, pch = 21, bg = ifelse(d$infection == "Infected", red, blue), col = "black", xlab = "Fitted value", ylab = "Standardized residual", main = "Residuals vs fitted")
+  abline(h = 0, lty = 2, col = "grey40")
+  qqnorm(r, pch = 21, bg = ifelse(d$infection == "Infected", red, blue), col = "black", main = "Normal Q-Q")
+  qqline(r, col = "grey40", lwd = 1.5)
+  hist(r, breaks = "FD", col = "grey85", border = "black", main = "Residual distribution", xlab = "Standardized residual")
+  plot(d$time_h, r, pch = ifelse(d$infection == "Uninfected", 21, 24), bg = ifelse(d$infection == "Infected", red, blue), col = "black", xlab = "Time after label addition (h)", ylab = "Standardized residual", main = "Residuals over time", xaxt = "n")
+  axis(1, at = time_levels, cex.axis = axis_text_cex, font = axis_text_font)
+  abline(h = 0, lty = 2, col = "grey40")
+  mtext(meta_row$display_endpoint, side = 3, outer = TRUE, line = 0.6, font = title_font, cex = title_cex)
+}
+
+for (plot_dir in c(trajectory_dir, diagnostic_dir)) {
+  unlink(list.files(plot_dir, pattern = "\\.(png|pdf)$", full.names = TRUE))
+}
+
+for (i in seq_len(nrow(plot_endpoint_meta))) {
+  m <- plot_endpoint_meta[i, , drop = FALSE]
+  d <- droplevels(analysis_data[analysis_data$endpoint_id == m$endpoint_id, ])
+  pdf(file.path(trajectory_dir, m$plot_file), width = 11, height = 7, onefile = FALSE)
+  plot_trajectory(d, fits[[m$endpoint_id]], m)
+  dev.off()
+  diagnostic_file <- sub("\\.pdf$", "_diagnostics.pdf", m$plot_file)
+  pdf(file.path(diagnostic_dir, diagnostic_file), width = 11, height = 8.5, onefile = FALSE)
+  plot_diagnostics(d, fits[[m$endpoint_id]], m)
+  dev.off()
+}
+
+pdf(file.path(output_dir, "kinetic_model_fitted_trajectories_all_endpoints.pdf"), width = 11, height = 7, onefile = TRUE)
+for (i in seq_len(nrow(plot_endpoint_meta))) {
+  m <- plot_endpoint_meta[i, , drop = FALSE]
+  d <- droplevels(analysis_data[analysis_data$endpoint_id == m$endpoint_id, ])
+  plot_trajectory(d, fits[[m$endpoint_id]], m)
+}
+dev.off()
+
+pdf(file.path(output_dir, "kinetic_model_diagnostic_plots_all_endpoints.pdf"), width = 11, height = 8.5, onefile = TRUE)
+for (i in seq_len(nrow(plot_endpoint_meta))) {
+  m <- plot_endpoint_meta[i, , drop = FALSE]
+  d <- droplevels(analysis_data[analysis_data$endpoint_id == m$endpoint_id, ])
+  plot_diagnostics(d, fits[[m$endpoint_id]], m)
+}
+dev.off()
+
+analysis_log <- c(
+  paste("Input workbook:", input_xlsx),
+  paste("Input MD5:", unname(tools::md5sum(input_xlsx))),
+  paste("Analysis timestamp:", format(Sys.time(), tz = "Europe/Berlin")),
+  "Model structure: Gaussian fixed-effects regression with infection, time, and their interaction.",
+  "Replicate labels were retained only as observation identifiers; no grouping or repeated-measures structure was fitted.",
+  capture.output(sessionInfo())
+)
+writeLines(analysis_log, file.path(output_dir, "analysis_session_log.txt"))
+```
+
+## Design and model rationale
+
+The analysis includes independent cell samples at 0.5, 1, 2, 4, and 8 h, with three biological replicates per infection condition and time point. The replicate labels identify observations but are not used as a grouping variable. All models are ordinary Gaussian fixed-effects regressions, with no repeated-measures temporal correlation.
+
+The response is fractional isotope incorporation expressed as a percentage. Endpoint names use “linked” because these measurements are kinetic pathway proxies rather than direct enzyme-activity assays.
+
+The exogenous d7-dhSph precursor-pool endpoint is retained in statistical summaries as quality control, but excluded from the primary enzyme-linked multiplicity family and from exported plot panels because d7-dhSph bypasses SPT and precursor labelling is close to saturation.
+
+## Input quality control
+
+```{r input-qc, results='asis'}
+knitr::kable(input_qc, digits = 3, row.names = FALSE)
+```
+
+No-label controls confirm absence of isotope signal and are not included in the kinetic models.
+
+## Model selection
+
+For every endpoint, four Gaussian fixed-effects models were evaluated:
+
+1. `incorporation ~ infection * time`
+2. `incorporation ~ infection * log2(time)`
+3. `incorporation ~ infection * natural_spline(time, df = 2)`
+4. `incorporation ~ infection * categorical_time`
+
+Categorical time served as the unconstrained lack-of-fit reference. If both simple continuous-time models lacked fit, the two-degree-of-freedom natural spline was evaluated. Categorical time was retained when the spline also lacked fit. Selection considered formal lack-of-fit tests, AIC, adjusted R², residual diagnostics, and parsimony.
+
+The global infection-by-time interaction tests whether the incorporation trajectory differs between infected and uninfected samples. A single slope is reported only when a linear clock-time or log2-time model is adequate.
+
+## Primary model results
+
+```{r model-summary, results='asis'}
+display_summary <- model_summary[, c(
+  "tracer", "display_endpoint", "selected_model_label",
+  "infection_by_time_interaction_p", "interaction_p_adjusted_BH",
+  "R2", "adjusted_R2", "primary_conclusion"
+)]
+names(display_summary) <- c(
+  "Tracer", "Endpoint", "Selected model", "Interaction P", "BH-adjusted P",
+  "R²", "Adjusted R²", "Conclusion"
+)
+knitr::kable(display_summary, digits = 4, row.names = FALSE)
+```
+
+Benjamini-Hochberg adjustment is performed separately within the eight prespecified pathway-linked endpoints for each tracer. The d7-dhSph precursor-pool quality-control endpoint is not assigned a BH-adjusted P value.
+
+## Diagnostics
+
+```{r diagnostics-summary, results='asis'}
+diagnostic_display <- model_diagnostics[, c(
+  "tracer", "display_endpoint", "selected_model", "exact_zero_count",
+  "Shapiro_Wilk_p", "residual_normality_assessment", "Breusch_Pagan_like_p",
+  "variance_assessment", "standardized_residual_count_abs_gt_2_5", "adjusted_R2"
+)]
+names(diagnostic_display) <- c(
+  "Tracer", "Endpoint", "Selected model", "Exact zeros", "Shapiro-Wilk P",
+  "Normality", "Variance-test P", "Variance", "|Residual| > 2.5", "Adjusted R²"
+)
+knitr::kable(diagnostic_display, digits = 4, row.names = FALSE)
+```
+
+Zeros are retained as biologically plausible observations. Diagnostic flags identify endpoints that require caution but do not automatically justify deleting observations or changing the response distribution.
+
+## Fitted trajectories
+
+Group mean observations, fitted trajectories, 95% confidence intervals, selected model, global interaction P value, BH-adjusted P value, and adjusted R² are shown below.
+
+```{r trajectory-panels, results='asis'}
+for (i in seq_len(nrow(plot_endpoint_meta))) {
+  cat("\n### ", plot_endpoint_meta$display_endpoint[i], "\n\n", sep = "")
+  cat("![](", file.path("fitted_trajectories", plot_endpoint_meta$plot_file[i]), ")\n\n", sep = "")
+}
+```
+
+## Relation to nonlinear saturation models
+
+A linear model in log2(time) is not itself a logistic or Michaelis-Menten fit. It implies `incorporation = intercept + slope * log2(time)`, which rises rapidly at early clock times and progressively flattens but has no finite plateau. A logistic curve fitted against log2(time) is mathematically related to a Hill-type curve in clock time; Michaelis-Menten is a special saturating form analogous to a Hill curve with coefficient 1 and lower asymptote 0. Transforming time alone does not provide the mechanistic assumptions or identifiable plateau parameters required by these models.
+
+For a monotone time course that approaches a plateau, an asymptotic exponential model such as `y(t) = plateau - (plateau - y0) * exp(-k * t)` is generally more natural than Michaelis-Menten because it represents first-order accumulation over time. Logistic or Gompertz models are more appropriate only when the data show a genuine lag and sigmoidal transition. With five distinct time points, separate condition-specific lower asymptotes, upper asymptotes, midpoints, and shape parameters would be weakly identified and prone to overfitting. Any such nonlinear model should therefore be a prespecified secondary analysis with few shared parameters, profile or bootstrap confidence intervals, and comparison against the selected empirical models.
+
+## Diagnostic plots
+
+```{r diagnostic-panels, results='asis'}
+for (i in seq_len(nrow(plot_endpoint_meta))) {
+  cat("\n### ", plot_endpoint_meta$display_endpoint[i], "\n\n", sep = "")
+  diagnostic_file <- sub("\\.pdf$", "_diagnostics.pdf", plot_endpoint_meta$plot_file[i])
+  cat("![](", file.path("diagnostic_plots", diagnostic_file), ")\n\n", sep = "")
+}
+```

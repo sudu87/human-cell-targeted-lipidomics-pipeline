@@ -1,0 +1,964 @@
+---
+title: "Isotope-tracer analysis sensitivity benchmark"
+author: "Sudip Das"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+params:
+  absolute_flux_file: "outputs/isotope_tracer_flux_analysis/flux_absolute_long.csv"
+  normalized_flux_file: "outputs/isotope_tracer_flux_analysis/normalized_sensitivity_flux_long.csv"
+  output_dir: "outputs/isotope_tracer_sensitivity_benchmark"
+  write_outputs: true
+---
+
+## Purpose
+
+This report checks whether the main isotope-tracer conclusions are robust to
+reasonable analysis choices. It benchmarks:
+
+1. raw-scale versus `log10(value + pseudovalue)` categorical-time models;
+2. log10 pseudovalues of `0.001`, `0.01`, and `0.1` for absolute abundance;
+3. absolute `pmol/sample` versus the optional total-sphingolipid-normalized
+   workbook block; and
+4. the predefined Pal-d3 and d7 isotope-pooling rules versus their labelled
+   component species.
+
+The benchmark evaluates agreement in effect direction and BH-FDR conclusions.
+It does not require different response definitions to produce identical
+p-values. Fractional-incorporation kinetics and absolute labelled abundance
+remain complementary quantities and are not treated as interchangeable.
+
+## Setup
+
+```{r setup, message=FALSE, warning=FALSE}
+required_packages <- c("dplyr", "tidyr", "ggplot2", "emmeans", "knitr")
+missing_packages <- required_packages[
+  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+if (length(missing_packages)) {
+  stop("Install required packages: ", paste(missing_packages, collapse = ", "))
+}
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+env_or_default <- function(name, current) {
+  value <- Sys.getenv(name, unset = "")
+  if (identical(value, "")) current else value
+}
+
+absolute_flux_file <- env_or_default(
+  "ISOTOPE_BENCHMARK_ABSOLUTE_FILE", params$absolute_flux_file
+)
+normalized_flux_file <- env_or_default(
+  "ISOTOPE_BENCHMARK_NORMALIZED_FILE", params$normalized_flux_file
+)
+output_dir <- env_or_default(
+  "ISOTOPE_BENCHMARK_OUTPUT_DIR", params$output_dir
+)
+write_outputs <- isTRUE(params$write_outputs)
+
+if (!file.exists(absolute_flux_file)) {
+  stop(
+    "Missing absolute flux table: ", absolute_flux_file,
+    ". Run scripts/isotope_tracer_flux_analysis.Rmd first."
+  )
+}
+
+if (write_outputs) {
+  dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+}
+
+write_csv <- function(x, filename) {
+  if (write_outputs) {
+    write.csv(x, file.path(output_dir, filename), row.names = FALSE)
+  }
+  invisible(x)
+}
+
+save_plot <- function(x, filename, width = 8, height = 5) {
+  if (write_outputs) {
+    ggsave(
+      file.path(output_dir, filename), x,
+      width = width, height = height, units = "in", bg = "white"
+    )
+  }
+  invisible(x)
+}
+
+read_nonempty_csv <- function(path) {
+  if (!file.exists(path) || file.info(path)$size == 0) {
+    return(tibble())
+  }
+  tryCatch(
+    as_tibble(read.csv(path, stringsAsFactors = FALSE, check.names = FALSE)),
+    error = function(e) tibble()
+  )
+}
+
+times <- c(0.5, 1, 2, 4, 8)
+classes <- c("dhCer", "Cer", "dhSM", "SM", "HexCer", "LacCer")
+pal_components <- c("d3-16:0", "d6-16:0")
+d7_components <- c("d7-16:0", "d7-24:0", "d7-24:1")
+lcb_by_experiment <- list(
+  `Pal-d3` = c("d3-dhSph", "d3-Sph"),
+  `d7-dhSph` = c("d7-dhSph", "d7-Sph", "d7-S1P")
+)
+```
+
+## Input validation and endpoint construction
+
+```{r input-and-endpoints}
+absolute_flux <- read_nonempty_csv(absolute_flux_file)
+normalized_flux <- read_nonempty_csv(normalized_flux_file)
+
+required_columns <- c(
+  "experiment", "unit", "berlin_sample_id", "infection",
+  "is_tracer_treated", "time_h", "replicate", "lipid_class_short",
+  "species", "value", "is_class_total", "is_global_total"
+)
+
+validate_flux <- function(x, label) {
+  if (!nrow(x)) return(invisible(FALSE))
+  missing <- setdiff(required_columns, names(x))
+  if (length(missing)) {
+    stop(label, " is missing columns: ", paste(missing, collapse = ", "))
+  }
+  if (any(!is.finite(x$value), na.rm = TRUE) || any(x$value < 0, na.rm = TRUE)) {
+    stop(label, " contains non-finite or negative measurement values.")
+  }
+  invisible(TRUE)
+}
+
+validate_flux(absolute_flux, "Absolute flux table")
+validate_flux(normalized_flux, "Normalized flux table")
+
+filter_analysis_rows <- function(x) {
+  x |>
+    filter(
+      is_tracer_treated,
+      !is_class_total,
+      !is_global_total,
+      infection %in% c("Uninfected", "Infected"),
+      time_h %in% times
+    ) |>
+    mutate(
+      infection = factor(infection, levels = c("Uninfected", "Infected")),
+      replicate = as.character(replicate)
+    )
+}
+
+make_lcb_readouts <- function(x) {
+  bind_rows(lapply(names(lcb_by_experiment), function(experiment_name) {
+    species_keep <- lcb_by_experiment[[experiment_name]]
+    x |>
+      filter(
+        experiment == experiment_name,
+        lipid_class_short == "LCB",
+        species %in% species_keep
+      ) |>
+      transmute(
+        experiment, unit, berlin_sample_id, infection, time_h, replicate,
+        lipid_class_short = "LCB",
+        endpoint = species,
+        definition = "primary_pooled",
+        value
+      )
+  }))
+}
+
+make_pal_class_readouts <- function(x) {
+  wide <- x |>
+    filter(
+      experiment == "Pal-d3",
+      lipid_class_short %in% classes,
+      species %in% pal_components
+    ) |>
+    select(
+      experiment, unit, berlin_sample_id, infection, time_h, replicate,
+      lipid_class_short, species, value
+    ) |>
+    pivot_wider(names_from = species, values_from = value)
+
+  if (!nrow(wide)) return(tibble())
+  if (anyNA(wide[pal_components])) {
+    stop("Pal-d3 benchmark is missing a paired d3 or d6 component.")
+  }
+
+  bind_rows(
+    wide |>
+      transmute(
+        experiment, unit, berlin_sample_id, infection, time_h, replicate,
+        lipid_class_short,
+        endpoint = paste(lipid_class_short, "d3+d6-16:0"),
+        definition = "primary_pooled",
+        value = `d3-16:0` + `d6-16:0`
+      ),
+    wide |>
+      transmute(
+        experiment, unit, berlin_sample_id, infection, time_h, replicate,
+        lipid_class_short,
+        endpoint = paste(lipid_class_short, "d3-only-16:0"),
+        definition = "d3_only",
+        value = `d3-16:0`
+      )
+  )
+}
+
+make_d7_class_readouts <- function(x) {
+  wide <- x |>
+    filter(
+      experiment == "d7-dhSph",
+      lipid_class_short %in% classes,
+      species %in% d7_components
+    ) |>
+    select(
+      experiment, unit, berlin_sample_id, infection, time_h, replicate,
+      lipid_class_short, species, value
+    ) |>
+    pivot_wider(names_from = species, values_from = value)
+
+  if (!nrow(wide)) return(tibble())
+  if (anyNA(wide[d7_components])) {
+    stop("d7 benchmark is missing one or more pooled labelled components.")
+  }
+
+  bind_rows(
+    wide |>
+      transmute(
+        experiment, unit, berlin_sample_id, infection, time_h, replicate,
+        lipid_class_short,
+        endpoint = paste0("d7-", lipid_class_short),
+        definition = "primary_pooled",
+        value = `d7-16:0` + `d7-24:0` + `d7-24:1`
+      ),
+    bind_rows(lapply(d7_components, function(component) {
+      wide |>
+        transmute(
+          experiment, unit, berlin_sample_id, infection, time_h, replicate,
+          lipid_class_short,
+          endpoint = paste(lipid_class_short, component),
+          definition = paste0(gsub("[^A-Za-z0-9]+", "_", component), "_only"),
+          value = .data[[component]]
+        )
+    }))
+  )
+}
+
+make_benchmark_readouts <- function(x) {
+  if (!nrow(x)) return(tibble())
+  filtered <- filter_analysis_rows(x)
+  bind_rows(
+    make_lcb_readouts(filtered),
+    make_pal_class_readouts(filtered),
+    make_d7_class_readouts(filtered)
+  ) |>
+    arrange(experiment, definition, endpoint, time_h, infection, replicate)
+}
+
+absolute_readouts <- make_benchmark_readouts(absolute_flux)
+normalized_readouts <- make_benchmark_readouts(normalized_flux)
+
+primary_design <- absolute_readouts |>
+  filter(definition == "primary_pooled") |>
+  count(experiment, endpoint, time_h, infection, name = "n")
+
+expected_endpoints <- c(`Pal-d3` = 8L, `d7-dhSph` = 9L)
+observed_endpoints <- absolute_readouts |>
+  filter(definition == "primary_pooled") |>
+  distinct(experiment, endpoint) |>
+  count(experiment, name = "n_endpoints")
+
+for (experiment_name in names(expected_endpoints)) {
+  observed <- observed_endpoints$n_endpoints[
+    observed_endpoints$experiment == experiment_name
+  ]
+  if (length(observed) != 1 || observed != expected_endpoints[[experiment_name]]) {
+    stop("Unexpected primary endpoint count for ", experiment_name, ".")
+  }
+}
+if (any(primary_design$n != 3)) {
+  stop("Expected three replicates per primary endpoint, time, and infection group.")
+}
+
+input_qc <- bind_rows(
+  absolute_readouts |>
+    summarise(
+      source = "absolute",
+      available = TRUE,
+      rows = n(),
+      endpoints = n_distinct(endpoint),
+      units = paste(sort(unique(unit)), collapse = ";")
+    ),
+  if (nrow(normalized_readouts)) {
+    normalized_readouts |>
+      summarise(
+        source = "normalized",
+        available = TRUE,
+        rows = n(),
+        endpoints = n_distinct(endpoint),
+        units = paste(sort(unique(unit)), collapse = ";")
+      )
+  } else {
+    tibble(
+      source = "normalized", available = FALSE, rows = 0L,
+      endpoints = 0L, units = NA_character_
+    )
+  }
+)
+
+write_csv(input_qc, "benchmark_input_qc.csv")
+input_qc
+```
+
+## Model engine
+
+All timepoint contrasts come from the corresponding interaction model:
+
+```text
+response ~ infection * categorical_time
+```
+
+Curve FDR is BH-adjusted across the endpoints in the same experiment,
+response scale, transformation, and endpoint-definition family. Timepoint FDR
+is BH-adjusted across all endpoint-by-time contrasts in that family.
+
+```{r model-engine}
+fit_curve <- function(data, transform, pseudovalue) {
+  model_data <- data |>
+    mutate(
+      infection = factor(infection, levels = c("Uninfected", "Infected")),
+      time_f = factor(time_h, levels = times),
+      response = if (transform == "raw") value else log10(value + pseudovalue)
+    )
+  fit <- lm(response ~ infection * time_f, data = model_data)
+  residual_deviance <- deviance(fit)
+  response_scale <- max(1, sum(model_data$response^2, na.rm = TRUE))
+  perfect_fit <- residual_deviance <= 100 * .Machine$double.eps * response_scale
+  if (perfect_fit) {
+    return(tibble(
+      n = nrow(model_data),
+      p_infection = NA_real_,
+      p_time = NA_real_,
+      p_interaction = NA_real_,
+      shapiro_residual_p = NA_real_,
+      max_abs_standardized_residual = NA_real_,
+      model_status = "zero_or_near_zero_residual_variance"
+    ))
+  }
+  a <- anova(fit)
+  tibble(
+    n = nrow(model_data),
+    p_infection = a["infection", "Pr(>F)"],
+    p_time = a["time_f", "Pr(>F)"],
+    p_interaction = a["infection:time_f", "Pr(>F)"],
+    shapiro_residual_p = shapiro.test(residuals(fit))$p.value,
+    max_abs_standardized_residual = max(abs(rstandard(fit)), na.rm = TRUE),
+    model_status = "estimated"
+  )
+}
+
+fit_timepoints <- function(data, transform, pseudovalue) {
+  model_data <- data |>
+    mutate(
+      infection = factor(infection, levels = c("Uninfected", "Infected")),
+      time_f = factor(time_h, levels = times),
+      response = if (transform == "raw") value else log10(value + pseudovalue)
+    )
+  fit <- lm(response ~ infection * time_f, data = model_data)
+  residual_deviance <- deviance(fit)
+  response_scale <- max(1, sum(model_data$response^2, na.rm = TRUE))
+  perfect_fit <- residual_deviance <= 100 * .Machine$double.eps * response_scale
+  if (perfect_fit) {
+    return(
+      model_data |>
+        group_by(time_h) |>
+        summarise(
+          estimate = mean(response[infection == "Infected"]) -
+            mean(response[infection == "Uninfected"]),
+          .groups = "drop"
+        ) |>
+        mutate(
+          se = NA_real_,
+          df = NA_real_,
+          t_ratio = NA_real_,
+          lower_cl = NA_real_,
+          upper_cl = NA_real_,
+          p_value = NA_real_,
+          direction = case_when(
+            estimate > 0 ~ "infected_higher",
+            estimate < 0 ~ "infected_lower",
+            TRUE ~ "equal"
+          ),
+          ratio_infected_over_uninfected = if (
+            transform == "log10"
+          ) 10^estimate else NA_real_,
+          model_status = "zero_or_near_zero_residual_variance"
+        )
+    )
+  }
+  emmeans::emmeans(fit, ~ infection | time_f) |>
+    emmeans::contrast(
+      method = list("Infected - Uninfected" = c(-1, 1)),
+      adjust = "none"
+    ) |>
+    summary(infer = c(TRUE, TRUE)) |>
+    as_tibble() |>
+    transmute(
+      time_h = as.numeric(as.character(time_f)),
+      estimate,
+      se = SE,
+      df,
+      t_ratio = t.ratio,
+      lower_cl = lower.CL,
+      upper_cl = upper.CL,
+      p_value = p.value,
+      direction = case_when(
+        estimate > 0 ~ "infected_higher",
+        estimate < 0 ~ "infected_lower",
+        TRUE ~ "equal"
+      ),
+      ratio_infected_over_uninfected = if (
+        transform == "log10"
+      ) 10^estimate else NA_real_,
+      model_status = "estimated"
+    )
+}
+
+run_model_family <- function(data, analysis_id, transform, pseudovalue) {
+  if (!nrow(data)) return(list(curves = tibble(), timepoints = tibble()))
+  transform_name <- transform
+  pseudovalue_used <- pseudovalue
+
+  curves <- data |>
+    group_by(
+      experiment, unit, definition, lipid_class_short, endpoint
+    ) |>
+    group_modify(~ fit_curve(.x, transform, pseudovalue)) |>
+    ungroup() |>
+    mutate(
+      analysis_id = analysis_id,
+      transform = transform_name,
+      pseudovalue = if (
+        transform_name == "log10"
+      ) pseudovalue_used else NA_real_
+    ) |>
+    group_by(experiment, unit, definition, analysis_id) |>
+    mutate(
+      fdr_infection = p.adjust(p_infection, method = "BH"),
+      fdr_time = p.adjust(p_time, method = "BH"),
+      curve_fdr = p.adjust(p_interaction, method = "BH"),
+      significant_curve_fdr_0_05 = curve_fdr < 0.05
+    ) |>
+    ungroup()
+
+  timepoints <- data |>
+    group_by(
+      experiment, unit, definition, lipid_class_short, endpoint
+    ) |>
+    group_modify(~ fit_timepoints(.x, transform, pseudovalue)) |>
+    ungroup() |>
+    mutate(
+      analysis_id = analysis_id,
+      transform = transform_name,
+      pseudovalue = if (
+        transform_name == "log10"
+      ) pseudovalue_used else NA_real_
+    ) |>
+    group_by(experiment, unit, definition, analysis_id) |>
+    mutate(
+      timepoint_fdr = p.adjust(p_value, method = "BH"),
+      significant_timepoint_fdr_0_05 = timepoint_fdr < 0.05
+    ) |>
+    ungroup()
+
+  list(curves = curves, timepoints = timepoints)
+}
+
+absolute_primary <- absolute_readouts |>
+  filter(definition == "primary_pooled")
+
+model_runs <- list(
+  raw = run_model_family(absolute_primary, "absolute_raw", "raw", NA_real_),
+  pv_0001 = run_model_family(
+    absolute_primary, "absolute_log10_pv_0.001", "log10", 0.001
+  ),
+  pv_001 = run_model_family(
+    absolute_primary, "absolute_log10_pv_0.01", "log10", 0.01
+  ),
+  pv_01 = run_model_family(
+    absolute_primary, "absolute_log10_pv_0.1", "log10", 0.1
+  ),
+  pooled_definitions = run_model_family(
+    absolute_readouts, "absolute_log10_pooling_definitions", "log10", 0.01
+  )
+)
+
+if (nrow(normalized_readouts)) {
+  model_runs$normalized <- run_model_family(
+    normalized_readouts |>
+      filter(definition == "primary_pooled"),
+    "normalized_log10_pv_0.01", "log10", 0.01
+  )
+}
+
+curve_models <- bind_rows(lapply(model_runs, `[[`, "curves")) |>
+  distinct()
+timepoint_models <- bind_rows(lapply(model_runs, `[[`, "timepoints")) |>
+  distinct()
+
+write_csv(curve_models, "benchmark_curve_models.csv")
+write_csv(timepoint_models, "benchmark_timepoint_contrasts.csv")
+```
+
+## Raw versus log10 models
+
+```{r raw-vs-log}
+raw_curve <- curve_models |>
+  filter(analysis_id == "absolute_raw") |>
+  select(
+    experiment, lipid_class_short, endpoint,
+    raw_curve_fdr = curve_fdr,
+    raw_significant = significant_curve_fdr_0_05
+  )
+
+log_curve <- curve_models |>
+  filter(analysis_id == "absolute_log10_pv_0.01") |>
+  select(
+    experiment, lipid_class_short, endpoint,
+    log10_curve_fdr = curve_fdr,
+    log10_significant = significant_curve_fdr_0_05
+  )
+
+raw_vs_log_curve <- inner_join(
+  raw_curve, log_curve,
+  by = c("experiment", "lipid_class_short", "endpoint")
+) |>
+  mutate(significance_agreement = raw_significant == log10_significant)
+
+raw_time <- timepoint_models |>
+  filter(analysis_id == "absolute_raw") |>
+  select(
+    experiment, lipid_class_short, endpoint, time_h,
+    raw_direction = direction,
+    raw_timepoint_fdr = timepoint_fdr,
+    raw_significant = significant_timepoint_fdr_0_05
+  )
+
+log_time <- timepoint_models |>
+  filter(analysis_id == "absolute_log10_pv_0.01") |>
+  select(
+    experiment, lipid_class_short, endpoint, time_h,
+    log10_direction = direction,
+    log10_timepoint_fdr = timepoint_fdr,
+    log10_significant = significant_timepoint_fdr_0_05
+  )
+
+raw_vs_log_timepoint <- inner_join(
+  raw_time, log_time,
+  by = c("experiment", "lipid_class_short", "endpoint", "time_h")
+) |>
+  mutate(
+    direction_agreement = raw_direction == log10_direction,
+    significance_agreement = raw_significant == log10_significant
+  )
+
+write_csv(raw_vs_log_curve, "raw_vs_log_curve_agreement.csv")
+write_csv(raw_vs_log_timepoint, "raw_vs_log_timepoint_agreement.csv")
+
+p_raw_log <- ggplot(
+  raw_vs_log_curve,
+  aes(
+    -log10(pmax(raw_curve_fdr, 1e-12)),
+    -log10(pmax(log10_curve_fdr, 1e-12)),
+    colour = experiment
+  )
+) +
+  geom_abline(slope = 1, intercept = 0, linetype = 2, colour = "grey50") +
+  geom_point(size = 3) +
+  labs(
+    x = "Raw-model -log10(curve FDR)",
+    y = "Log10-model -log10(curve FDR)",
+    colour = "Experiment"
+  ) +
+  theme_classic(base_size = 11)
+
+save_plot(p_raw_log, "raw_vs_log_curve_fdr.pdf")
+raw_vs_log_curve
+```
+
+## Pseudovalue sensitivity
+
+```{r pseudovalue-sensitivity}
+pseudovalue_curves <- curve_models |>
+  filter(
+    analysis_id %in% c(
+      "absolute_log10_pv_0.001",
+      "absolute_log10_pv_0.01",
+      "absolute_log10_pv_0.1"
+    )
+  ) |>
+  select(
+    experiment, lipid_class_short, endpoint, pseudovalue,
+    curve_fdr, significant_curve_fdr_0_05
+  )
+
+pseudovalue_curve_stability <- pseudovalue_curves |>
+  group_by(experiment, lipid_class_short, endpoint) |>
+  summarise(
+    n_estimable = sum(!is.na(curve_fdr)),
+    min_curve_fdr = if (n_estimable > 0) min(curve_fdr, na.rm = TRUE) else NA_real_,
+    max_curve_fdr = if (n_estimable > 0) max(curve_fdr, na.rm = TRUE) else NA_real_,
+    significance_stable = n_estimable == 3 &&
+      n_distinct(significant_curve_fdr_0_05[!is.na(curve_fdr)]) == 1,
+    .groups = "drop"
+  )
+
+pseudovalue_timepoint_stability <- timepoint_models |>
+  filter(
+    analysis_id %in% c(
+      "absolute_log10_pv_0.001",
+      "absolute_log10_pv_0.01",
+      "absolute_log10_pv_0.1"
+    )
+  ) |>
+  group_by(experiment, lipid_class_short, endpoint, time_h) |>
+  summarise(
+    n_estimable = sum(!is.na(timepoint_fdr)),
+    direction_stable = n_distinct(direction) == 1,
+    significance_stable = n_estimable == 3 &&
+      n_distinct(significant_timepoint_fdr_0_05[!is.na(timepoint_fdr)]) == 1,
+    min_timepoint_fdr = if (
+      n_estimable > 0
+    ) min(timepoint_fdr, na.rm = TRUE) else NA_real_,
+    max_timepoint_fdr = if (
+      n_estimable > 0
+    ) max(timepoint_fdr, na.rm = TRUE) else NA_real_,
+    .groups = "drop"
+  )
+
+write_csv(pseudovalue_curves, "pseudovalue_curve_results.csv")
+write_csv(
+  pseudovalue_curve_stability,
+  "pseudovalue_curve_stability.csv"
+)
+write_csv(
+  pseudovalue_timepoint_stability,
+  "pseudovalue_timepoint_stability.csv"
+)
+
+p_pseudovalue <- ggplot(
+  pseudovalue_curves,
+  aes(factor(pseudovalue), -log10(pmax(curve_fdr, 1e-12)), group = endpoint)
+) +
+  geom_line(colour = "grey55", linewidth = 0.5) +
+  geom_point(aes(colour = experiment), size = 2.2) +
+  facet_wrap(~ experiment, scales = "free_y") +
+  labs(
+    x = "Log10 pseudovalue",
+    y = "-log10(curve FDR)",
+    colour = "Experiment"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(legend.position = "none")
+
+save_plot(p_pseudovalue, "pseudovalue_curve_fdr_sensitivity.pdf")
+pseudovalue_curve_stability
+```
+
+## Absolute versus normalized block
+
+This comparison is generated only when the normalized workbook block was
+imported by `scripts/isotope_tracer_flux_analysis.Rmd`. Normalization can alter
+the scientific estimand, so agreement supports robustness but disagreement is
+not automatically evidence that either scale is invalid.
+
+```{r absolute-vs-normalized}
+if ("normalized" %in% names(model_runs)) {
+  absolute_curve <- curve_models |>
+    filter(analysis_id == "absolute_log10_pv_0.01") |>
+    select(
+      experiment, lipid_class_short, endpoint,
+      absolute_curve_fdr = curve_fdr,
+      absolute_significant = significant_curve_fdr_0_05
+    )
+  normalized_curve <- curve_models |>
+    filter(analysis_id == "normalized_log10_pv_0.01") |>
+    select(
+      experiment, lipid_class_short, endpoint,
+      normalized_curve_fdr = curve_fdr,
+      normalized_significant = significant_curve_fdr_0_05
+    )
+  absolute_vs_normalized_curve <- inner_join(
+    absolute_curve, normalized_curve,
+    by = c("experiment", "lipid_class_short", "endpoint")
+  ) |>
+    mutate(
+      significance_agreement = absolute_significant == normalized_significant
+    )
+
+  absolute_time <- timepoint_models |>
+    filter(analysis_id == "absolute_log10_pv_0.01") |>
+    select(
+      experiment, lipid_class_short, endpoint, time_h,
+      absolute_direction = direction,
+      absolute_timepoint_fdr = timepoint_fdr,
+      absolute_significant = significant_timepoint_fdr_0_05
+    )
+  normalized_time <- timepoint_models |>
+    filter(analysis_id == "normalized_log10_pv_0.01") |>
+    select(
+      experiment, lipid_class_short, endpoint, time_h,
+      normalized_direction = direction,
+      normalized_timepoint_fdr = timepoint_fdr,
+      normalized_significant = significant_timepoint_fdr_0_05
+    )
+  absolute_vs_normalized_timepoint <- inner_join(
+    absolute_time, normalized_time,
+    by = c("experiment", "lipid_class_short", "endpoint", "time_h")
+  ) |>
+    mutate(
+      direction_agreement = absolute_direction == normalized_direction,
+      significance_agreement = absolute_significant == normalized_significant
+    )
+
+  p_absolute_normalized <- ggplot(
+    absolute_vs_normalized_curve,
+    aes(
+      -log10(pmax(absolute_curve_fdr, 1e-12)),
+      -log10(pmax(normalized_curve_fdr, 1e-12)),
+      colour = experiment
+    )
+  ) +
+    geom_abline(slope = 1, intercept = 0, linetype = 2, colour = "grey50") +
+    geom_point(size = 3) +
+    labs(
+      x = "Absolute -log10(curve FDR)",
+      y = "Normalized-block -log10(curve FDR)",
+      colour = "Experiment"
+    ) +
+    theme_classic(base_size = 11)
+
+  write_csv(
+    absolute_vs_normalized_curve,
+    "absolute_vs_normalized_curve_comparison.csv"
+  )
+  write_csv(
+    absolute_vs_normalized_timepoint,
+    "absolute_vs_normalized_timepoint_comparison.csv"
+  )
+  save_plot(
+    p_absolute_normalized,
+    "absolute_vs_normalized_curve_fdr.pdf"
+  )
+} else {
+  absolute_vs_normalized_curve <- tibble()
+  absolute_vs_normalized_timepoint <- tibble()
+}
+
+absolute_vs_normalized_curve
+```
+
+## Isotope-pooling sensitivity
+
+The primary Pal-d3 endpoint sums d3 and d6 for the relevant 16:0 species. The
+primary d7 class endpoint sums d7-16:0, d7-24:0, and d7-24:1. Comparisons with
+single components are sensitivity analyses of endpoint construction, not
+tests of identical biological quantities. LCB molecules remain individual and
+are therefore excluded from this pooling comparison.
+
+```{r pooling-sensitivity}
+pool_curves <- curve_models |>
+  filter(
+    analysis_id == "absolute_log10_pooling_definitions",
+    lipid_class_short != "LCB"
+  ) |>
+  select(
+    experiment, lipid_class_short, definition, endpoint,
+    curve_fdr, significant_curve_fdr_0_05
+  )
+
+primary_pool_curves <- pool_curves |>
+  filter(definition == "primary_pooled") |>
+  select(
+    experiment, lipid_class_short,
+    primary_endpoint = endpoint,
+    primary_curve_fdr = curve_fdr,
+    primary_significant = significant_curve_fdr_0_05
+  )
+
+pooling_curve_comparison <- pool_curves |>
+  filter(definition != "primary_pooled") |>
+  left_join(primary_pool_curves, by = c("experiment", "lipid_class_short")) |>
+  rename(
+    component_endpoint = endpoint,
+    component_curve_fdr = curve_fdr,
+    component_significant = significant_curve_fdr_0_05
+  ) |>
+  mutate(
+    significance_agreement = component_significant == primary_significant
+  )
+
+pool_timepoints <- timepoint_models |>
+  filter(
+    analysis_id == "absolute_log10_pooling_definitions",
+    lipid_class_short != "LCB"
+  )
+
+primary_pool_timepoints <- pool_timepoints |>
+  filter(definition == "primary_pooled") |>
+  select(
+    experiment, lipid_class_short, time_h,
+    primary_endpoint = endpoint,
+    primary_direction = direction,
+    primary_timepoint_fdr = timepoint_fdr,
+    primary_significant = significant_timepoint_fdr_0_05
+  )
+
+pooling_timepoint_comparison <- pool_timepoints |>
+  filter(definition != "primary_pooled") |>
+  left_join(
+    primary_pool_timepoints,
+    by = c("experiment", "lipid_class_short", "time_h")
+  ) |>
+  rename(
+    component_endpoint = endpoint,
+    component_direction = direction,
+    component_timepoint_fdr = timepoint_fdr,
+    component_significant = significant_timepoint_fdr_0_05
+  ) |>
+  mutate(
+    direction_agreement = component_direction == primary_direction,
+    significance_agreement = component_significant == primary_significant
+  )
+
+write_csv(pooling_curve_comparison, "pooling_curve_comparison.csv")
+write_csv(pooling_timepoint_comparison, "pooling_timepoint_comparison.csv")
+pooling_curve_comparison
+```
+
+## Benchmark summary
+
+```{r benchmark-summary}
+agreement_row <- function(comparison, data, direction_col = NULL) {
+  direction_values <- if (
+    !is.null(direction_col) && direction_col %in% names(data)
+  ) data[[direction_col]] else logical()
+  significance_values <- if (
+    "significance_agreement" %in% names(data)
+  ) data$significance_agreement else logical()
+  tibble(
+    comparison = comparison,
+    n_direction_compared = sum(!is.na(direction_values)),
+    n_fdr_compared = sum(!is.na(significance_values)),
+    direction_agreement_pct = if (sum(!is.na(direction_values)) > 0) {
+      100 * mean(direction_values, na.rm = TRUE)
+    } else {
+      NA_real_
+    },
+    significance_agreement_pct = if (sum(!is.na(significance_values)) > 0) {
+      100 * mean(significance_values, na.rm = TRUE)
+    } else {
+      NA_real_
+    }
+  )
+}
+
+benchmark_overview <- bind_rows(
+  agreement_row("Raw vs log10: curve FDR", raw_vs_log_curve),
+  agreement_row(
+    "Raw vs log10: timepoint direction/FDR",
+    raw_vs_log_timepoint,
+    "direction_agreement"
+  ),
+  tibble(
+    comparison = "Pseudovalue: curve FDR stability",
+    n_direction_compared = 0L,
+    n_fdr_compared = sum(pseudovalue_curve_stability$n_estimable == 3),
+    direction_agreement_pct = NA_real_,
+    significance_agreement_pct = 100 * mean(
+      pseudovalue_curve_stability$significance_stable[
+        pseudovalue_curve_stability$n_estimable == 3
+      ],
+      na.rm = TRUE
+    )
+  ),
+  tibble(
+    comparison = "Pseudovalue: timepoint direction/FDR stability",
+    n_direction_compared = nrow(pseudovalue_timepoint_stability),
+    n_fdr_compared = sum(pseudovalue_timepoint_stability$n_estimable == 3),
+    direction_agreement_pct = 100 * mean(
+      pseudovalue_timepoint_stability$direction_stable,
+      na.rm = TRUE
+    ),
+    significance_agreement_pct = 100 * mean(
+      pseudovalue_timepoint_stability$significance_stable[
+        pseudovalue_timepoint_stability$n_estimable == 3
+      ],
+      na.rm = TRUE
+    )
+  ),
+  agreement_row(
+    "Absolute vs normalized: curve FDR",
+    absolute_vs_normalized_curve
+  ),
+  agreement_row(
+    "Absolute vs normalized: timepoint direction/FDR",
+    absolute_vs_normalized_timepoint,
+    "direction_agreement"
+  ),
+  agreement_row(
+    "Pooled vs component: curve FDR",
+    pooling_curve_comparison
+  ),
+  agreement_row(
+    "Pooled vs component: timepoint direction/FDR",
+    pooling_timepoint_comparison,
+    "direction_agreement"
+  )
+)
+
+write_csv(benchmark_overview, "benchmark_overview.csv")
+
+format_pct <- function(x) {
+  ifelse(is.na(x), "not available", sprintf("%.1f%%", x))
+}
+
+summary_lines <- c(
+  "# Isotope-Tracer Sensitivity Benchmark",
+  "",
+  "The primary analysis uses absolute `pmol/sample`, predefined isotope pooling, and `log10(value + 0.01)` categorical-time interaction models.",
+  "",
+  "## Agreement Summary",
+  "",
+  "| Comparison | n direction | n FDR | Direction agreement | FDR-decision agreement |",
+  "| --- | ---: | ---: | ---: | ---: |",
+  vapply(seq_len(nrow(benchmark_overview)), function(i) {
+    paste0(
+      "| ", benchmark_overview$comparison[i],
+      " | ", benchmark_overview$n_direction_compared[i],
+      " | ", benchmark_overview$n_fdr_compared[i],
+      " | ", format_pct(benchmark_overview$direction_agreement_pct[i]),
+      " | ", format_pct(benchmark_overview$significance_agreement_pct[i]),
+      " |"
+    )
+  }, character(1)),
+  "",
+  "## Interpretation Limits",
+  "",
+  "- Agreement means that conclusions are not highly sensitive to the tested choice; it does not prove that every model is equally appropriate.",
+  "- Absolute and total-sphingolipid-normalized blocks answer different quantitative questions.",
+  "- Pooled and single-component isotope endpoints are related but non-identical biological quantities.",
+  "- Fractional-incorporation kinetics should be interpreted beside, not substituted for, absolute labelled abundance.",
+  "- FDR < 0.05 is used as the decision threshold, but effect direction, uncertainty, diagnostics, and biological context remain important."
+)
+
+if (write_outputs) {
+  writeLines(summary_lines, file.path(output_dir, "BENCHMARK_SUMMARY.md"))
+}
+
+knitr::kable(benchmark_overview, digits = 1)
+```

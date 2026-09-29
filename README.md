@@ -21,6 +21,7 @@ The analysis workflow includes:
 - heatmap generation
 - multivariate statistical analysis
 - PERMANOVA and dispersion testing
+- isotope-tracer incorporation kinetics and absolute labelled-abundance analysis
 - downstream exploratory visualization
 
 ## Repository structure
@@ -46,6 +47,11 @@ The analysis workflow includes:
 │  ├─ sms12_individual_lipids_permanova_dispersion_analysis.R
 │  ├─ custom_pairwise_lipid_contrast_heatmap.R
 │  ├─ pairwise_fdr_lipid_heatmap.R
+│  ├─ isotope_tracer_flux_analysis.Rmd
+│  ├─ incorporation_kinetics_fixed_analysis.Rmd
+│  ├─ pal_d3_pooled_absolute_analysis.R
+│  ├─ d7_pooled_absolute_analysis.R
+│  ├─ isotope_tracer_sensitivity_benchmark.Rmd
 │  └─ ...
 └─ images/
    ├─ hist_raw_values.png
@@ -76,6 +82,7 @@ broom
 writexl
 rcompanion
 scales
+knitr
 ```
 
 For a reproducible package environment, use the versions recorded in [`renv.lock`](renv.lock):
@@ -103,7 +110,8 @@ install.packages(c(
   "broom",
   "writexl",
   "rcompanion",
-  "scales"
+  "scales",
+  "knitr"
 ))
 ```
 
@@ -129,6 +137,38 @@ For step-by-step reproducibility instructions, including Zenodo input-file mappi
 
 A small synthetic demo workbook is provided in [`demo_data/`](demo_data/) for installation checks and reviewer testing.
 
+## Isotope-tracer analysis
+
+The isotope-tracer workflows are integrated with the rest of the repository
+under `scripts/`. They keep three related quantities distinct:
+
+- fractional incorporation, used for endpoint-specific kinetic-trajectory models;
+- absolute labelled abundance in `pmol/sample`, used for categorical-time interaction models and timepoint contrasts; and
+- the optional `fmol/pmol total sphingolipids` workbook block, used only as a sensitivity comparison.
+
+The primary absolute analyses use `log10(value + 0.01)` for statistical
+models while plotting untransformed values. Pal-d3 class endpoints combine d3
+and d6 signals for the relevant 16:0 species. The d7 class endpoints combine
+d7-16:0, d7-24:0, and d7-24:1. Labelled LCB molecules remain separate.
+
+| Script | Purpose |
+| --- | --- |
+| `isotope_tracer_flux_analysis.Rmd` | Imports the Pal-d3 and d7-dhSph workbooks, validates their layouts, creates species-level tidy tables, and runs supporting AUC and interaction analyses. |
+| `pal_d3_pooled_absolute_analysis.R` | Tests eight Pal-d3 absolute endpoints, including d3+d6 class pools, with experiment-wide BH correction. |
+| `d7_pooled_absolute_analysis.R` | Tests nine d7 absolute endpoints, including pooled labelled classes and individual labelled LCB molecules. |
+| `incorporation_kinetics_fixed_analysis.Rmd` | Fits the retained endpoint-specific fractional-incorporation kinetic models on the original clock-time axis. |
+| `isotope_tracer_sensitivity_benchmark.Rmd` | Benchmarks raw versus log10 models, pseudovalue choices, absolute versus normalized blocks, and isotope-pooling definitions. |
+
+The line-plot `curve FDR` is the BH-adjusted infection-by-time interaction
+p-value. Timepoint comparisons are estimated from the same interaction model
+with `emmeans`, then adjusted across all endpoint-by-time contrasts in the
+relevant tracer experiment. The benchmark measures robustness of effect
+directions and FDR conclusions; it does not treat absolute abundance,
+normalized measurements, and fractional incorporation as interchangeable.
+
+Exact commands, required workbook names, output paths, and run order are given
+in [`REPRODUCIBILITY.md`](REPRODUCIBILITY.md).
+
 ## Input data availability
 
 Primary experimental input data files are not included in this repository. They are deposited in Zenodo:
@@ -151,6 +191,18 @@ Typical outputs include:
 - PERMANOVA results
 - dispersion test results
 - diagnostic plots
+- isotope-labelled species and pooled-class time courses
+- infection-by-time and `emmeans` contrast tables
+- isotope-analysis sensitivity benchmark tables and figures
+
+Generated results are written below `outputs/` and are not part of the source
+repository.
+
+## Versioning
+
+This repository follows semantic versioning. Version `1.1.0` adds the
+isotope-tracer analysis and sensitivity-benchmarking workflows without
+changing the existing targeted-lipidomics interfaces.
 
 ## Contact
 

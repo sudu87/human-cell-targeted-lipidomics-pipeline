@@ -146,6 +146,7 @@ These are the main Zenodo files expected by the current scripts.
 | Inhibitor individual lipid raw data | `17. Rawdata_ARC39_Individual SL.xlsx`, `18. Rawdata_AKS466_Individual SL.xlsx`, `19. Rawdata_Desipramine_Individual SL.xlsx`, `20. Rawdata_HPA-12_Individual SL.xlsx`, `21. Rawdata_Myriocin_Individual SL_new.xlsx`, `22. Rawdata_Untreated_Individual SL.xlsx`, `23. Rawdata_DMSO_Individual SL.xlsx` | `inhibitor_infection_heatmap_average_replicates.R`, `manova_per_lipid_anova_analysis.R` |
 | Inhibitor total pairwise contrasts | `12. Pairwise comparasion_ARC39_posthoc inhibitor contrasts by infection_Total SL.xlsx`, `13. Pairwise comparasion_Desipramine_posthoc inhibitor contrasts by infection_Total SL.xlsx`, `14. Pairwise comparasion_HPA-12_posthoc inhibitor contrasts by infection_Total SL.xlsx`, `15. Pairwise comparasion_Myriocin_posthoc inhibitor contrasts by infection_Total SL.xlsx`, `16. Pairwise comparasion_AKS466_posthoc inhibitor contrasts by infection_Total SL.xlsx` | `pairwise_fdr_lipid_heatmap.R`, `custom_pairwise_lipid_contrast_heatmap.R` |
 | Inhibitor individual pairwise contrasts | `24. Pairwise comparasion_ARC39_posthoc inhibitor contrasts by infection_Individual SL.xlsx`, `25. Pairwise comparasion_Desipramine_posthoc inhibitor contrasts by infection_Individual SL.xlsx`, `26. Pairwise comparasion_HPA-12_posthoc inhibitor contrasts by infection_Individual SL.xlsx`, `27. Pairwise comparasion_Myriocin_posthoc inhibitor contrasts by infection_Individual SL.xlsx`, `28. Pairwise comparasion_AKS466_posthoc inhibitor contrasts by infection_Individual SL.xlsx` | `pairwise_fdr_lipid_heatmap.R`, `custom_pairwise_lipid_contrast_heatmap.R` |
+| Isotope-tracer incorporation | `2026-07-27_results_Würzburg_Revision Nat Comm_Pal-d3 (1).xlsx`, `2026-08-03_results_Würzburg_Revision Nat Comm_d7-dhSph.xlsx`, and `10. Final Incorporation rate _ Normalized to each class total SL_d3-pal and d7-dhsph_AP_5-09-2026.xlsx` | `isotope_tracer_flux_analysis.Rmd`, `pal_d3_pooled_absolute_analysis.R`, `d7_pooled_absolute_analysis.R`, `incorporation_kinetics_fixed_analysis.Rmd`, `isotope_tracer_sensitivity_benchmark.Rmd` |
 
 ## 7. Run Scripts
 
@@ -218,7 +219,109 @@ Then run:
 Rscript scripts/custom_pairwise_lipid_contrast_heatmap.R
 ```
 
-## 9. Check Outputs
+## 9. Run The Isotope-Tracer Analyses
+
+Run all commands from the repository root. Place the three isotope workbooks
+listed above in `data/`, or supply their full paths in the commands.
+
+### 9.1 Prepare the shared species-level tables
+
+Execute the main isotope notebook with both the absolute and optional normalized
+workbook blocks. The absolute `pmol/sample` block remains the primary analysis;
+the normalized block is imported only for sensitivity benchmarking.
+
+```sh
+PAL_D3_INPUT_FILE="data/2026-07-27_results_Würzburg_Revision Nat Comm_Pal-d3 (1).xlsx" \
+D7_DHSPH_INPUT_FILE="data/2026-08-03_results_Würzburg_Revision Nat Comm_d7-dhSph.xlsx" \
+ISOTOPE_OUTPUT_DIR="outputs/isotope_tracer_flux_analysis" \
+WRITE_OUTPUTS=true \
+INCLUDE_NORMALIZED_BLOCK=true \
+EXPORT_INDIVIDUAL_PANELS=true \
+INDIVIDUAL_PANEL_FORMATS=pdf \
+Rscript -e '
+  code <- tempfile(fileext = ".R")
+  knitr::purl(
+    "scripts/isotope_tracer_flux_analysis.Rmd",
+    output = code,
+    documentation = 0,
+    quiet = TRUE
+  )
+  source(code, chdir = FALSE)
+'
+```
+
+This creates `outputs/isotope_tracer_flux_analysis/flux_absolute_long.csv`,
+which is the documented intermediate used by both pooled absolute-abundance
+scripts.
+
+### 9.2 Run pooled absolute labelled-abundance analyses
+
+```sh
+Rscript scripts/pal_d3_pooled_absolute_analysis.R
+Rscript scripts/d7_pooled_absolute_analysis.R
+```
+
+The default output directories are:
+
+```text
+outputs/isotope_tracer_absolute_labelled_abundance/pal_d3/
+outputs/isotope_tracer_absolute_labelled_abundance/d7_dhsph/
+```
+
+The Pal-d3 analysis combines d3 and d6 signals for the relevant 16:0 species
+before testing six classes; d3-dhSph and d3-Sph remain individual molecules.
+The d7 analysis combines d7-16:0, d7-24:0, and d7-24:1 within each of six
+classes; d7-dhSph, d7-Sph, and d7-S1P remain individual molecules. Both use
+`log10(value + 0.01) ~ infection * categorical_time`, with timepoint `emmeans`
+contrasts derived from that interaction model.
+
+### 9.3 Run fractional-incorporation kinetics
+
+```sh
+INCORPORATION_XLSX="data/10. Final Incorporation rate _ Normalized to each class total SL_d3-pal and d7-dhsph_AP_5-09-2026.xlsx" \
+KINETIC_OUTPUT_DIR="outputs/isotope_incorporation_kinetics" \
+Rscript -e '
+  code <- tempfile(fileext = ".R")
+  knitr::purl(
+    "scripts/incorporation_kinetics_fixed_analysis.Rmd",
+    output = code,
+    documentation = 0,
+    quiet = TRUE
+  )
+  source(code, chdir = FALSE)
+'
+```
+
+The retained figures use the original clock-time axis. Endpoint-specific
+selection considers linear time, log2 time, a low-complexity natural spline,
+and categorical time, but does not export the discarded forced-log2 figure
+sets. Fractional incorporation is not substituted for absolute abundance.
+
+### 9.4 Run the isotope-analysis sensitivity benchmark
+
+```sh
+Rscript -e '
+  code <- tempfile(fileext = ".R")
+  knitr::purl(
+    "scripts/isotope_tracer_sensitivity_benchmark.Rmd",
+    output = code,
+    documentation = 0,
+    quiet = TRUE
+  )
+  source(code, chdir = FALSE)
+'
+```
+
+The benchmark compares raw and log10 models, three log10 pseudovalues,
+absolute and total-sphingolipid-normalized workbook blocks, and predefined
+pooled isotope endpoints versus their labelled components. It records effect-
+direction and FDR-decision agreement. These are sensitivity comparisons, not
+claims that the response definitions estimate the same biological quantity.
+
+If the normalized block is unavailable, the benchmark skips only the
+absolute-versus-normalized comparison and runs the other checks.
+
+## 10. Check Outputs
 
 Each script writes files to the configured output directory. Typical outputs include:
 
@@ -229,10 +332,13 @@ Each script writes files to the configured output directory. Typical outputs inc
 - dispersion test summaries
 - per-lipid ANOVA and posthoc tables
 - pairwise contrast heatmap plot data
+- isotope species and pooled-class analysis tables
+- isotope kinetic-model summaries and PDF trajectories
+- sensitivity-benchmark agreement tables and PDF diagnostics
 
 Keep output directories separate by analysis so that files from different workflows do not overwrite each other.
 
-## 10. Record Provenance
+## 11. Record Provenance
 
 For a fully reproducible rerun, record:
 

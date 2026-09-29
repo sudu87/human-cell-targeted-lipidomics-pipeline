@@ -1,0 +1,14 @@
+.DS_Store
+.RData
+.Rhistory
+.Rproj.user/
+.artifact_work/
+.docx_qa/
+outputs/
+data/
+rawdata/
+rendered_nature_checklist/
+2. Flux /
+/*.xlsx
+~$*
+documents and instructions/isotope_tracer_analysis_changes_for_reviewers.md

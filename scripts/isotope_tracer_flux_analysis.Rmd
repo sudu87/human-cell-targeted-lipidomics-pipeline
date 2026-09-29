@@ -1,0 +1,3431 @@
+---
+title: "Isotope Tracer Flux Analysis"
+author: "Sudip Das"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+params:
+  pal_d3_input_file: ""
+  d7_dhsph_input_file: ""
+  output_dir: "outputs/isotope_tracer_flux_analysis"
+  pseudovalue: 0.01
+  include_normalized_block: false
+  export_individual_panels: false
+  individual_panel_formats: "png,pdf"
+  write_outputs: false
+---
+
+## 1. Purpose
+
+This notebook starts the isotope-tracing analysis for the Pal-d3 and
+d7-dhSph flux experiments.
+
+The main goal is to create one adaptable tidy data structure from both
+workbooks. The downstream analysis should then use the same columns for both
+tracers:
+
+- `flux_long`: one row per sample and measured lipid column
+- `flux_absolute_long`: absolute `pmol / sample` rows only
+- `flux_species_readouts`: non-LCB species-level labelled and unlabelled
+  readouts
+- `flux_class_readouts`: supporting non-LCB class-level labelled, unlabelled,
+  and workbook-total readouts; these are not used as the primary tracer
+  analysis features
+- `flux_lcb_readouts`: molecule-level LCB labelled and unlabelled readouts
+- `flux_analysis_readouts`: combined primary analysis table with non-LCB
+  species plus molecule-level LCB features
+- `flux_labelled_species`: individual labelled species, useful for inspecting
+  d7-dhSph conversion products such as `d7-Sph` and `d7-S1P`
+The absolute `pmol / sample` block is the primary analysis block. The normalized
+`fmol / pmol total sphingolipids` block can be imported by setting
+`params$include_normalized_block = TRUE`, but it is not used as the default
+primary analysis.
+
+## 2. Setup
+
+```{r setup, message=FALSE, warning=FALSE}
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(emmeans)
+
+`%||%` <- function(x, y) {
+  if (is.null(x)) {
+    y
+  } else {
+    x
+  }
+}
+
+if (!exists("params")) {
+  params <- list()
+}
+
+params$pal_d3_input_file <- params$pal_d3_input_file %||% ""
+params$d7_dhsph_input_file <- params$d7_dhsph_input_file %||% ""
+params$output_dir <- params$output_dir %||% "outputs/isotope_tracer_flux_analysis"
+params$pseudovalue <- params$pseudovalue %||% 0.01
+params$include_normalized_block <- params$include_normalized_block %||% FALSE
+params$export_individual_panels <- params$export_individual_panels %||% FALSE
+params$individual_panel_formats <- params$individual_panel_formats %||% "png"
+params$write_outputs <- params$write_outputs %||% FALSE
+
+env_or_default <- function(name, current) {
+  value <- Sys.getenv(name, unset = "")
+  if (identical(value, "")) current else value
+}
+
+params$pal_d3_input_file <- env_or_default(
+  "PAL_D3_INPUT_FILE", params$pal_d3_input_file
+)
+params$d7_dhsph_input_file <- env_or_default(
+  "D7_DHSPH_INPUT_FILE", params$d7_dhsph_input_file
+)
+params$output_dir <- env_or_default(
+  "ISOTOPE_OUTPUT_DIR", params$output_dir
+)
+params$pseudovalue <- as.numeric(env_or_default(
+  "ISOTOPE_LOG10_PSEUDOVALUE", params$pseudovalue
+))
+
+write_outputs_env <- Sys.getenv("WRITE_OUTPUTS", unset = "")
+write_outputs <- isTRUE(params$write_outputs) ||
+  tolower(write_outputs_env) %in% c("true", "1", "yes")
+
+include_normalized_block_env <- Sys.getenv("INCLUDE_NORMALIZED_BLOCK", unset = "")
+include_normalized_block <- isTRUE(params$include_normalized_block) ||
+  tolower(include_normalized_block_env) %in% c("true", "1", "yes")
+
+export_individual_panels_env <- Sys.getenv("EXPORT_INDIVIDUAL_PANELS", unset = "")
+export_individual_panels <- isTRUE(params$export_individual_panels) ||
+  tolower(export_individual_panels_env) %in% c("true", "1", "yes")
+
+individual_panel_formats_env <- Sys.getenv("INDIVIDUAL_PANEL_FORMATS", unset = "")
+individual_panel_formats <- if (!identical(individual_panel_formats_env, "")) {
+  individual_panel_formats_env
+} else {
+  params$individual_panel_formats
+}
+
+individual_panel_formats <- individual_panel_formats |>
+  str_split(",") |>
+  unlist() |>
+  str_squish() |>
+  str_to_lower()
+
+individual_panel_formats <- individual_panel_formats[
+  individual_panel_formats %in% c("png", "pdf")
+]
+
+if (length(individual_panel_formats) == 0) {
+  stop("individual_panel_formats must include png, pdf, or both.")
+}
+
+output_dir <- params$output_dir
+pseudovalue <- as.numeric(params$pseudovalue)
+
+if (!is.finite(pseudovalue) || pseudovalue <= 0) {
+  stop("params$pseudovalue must be a positive number.")
+}
+
+non_lcb_lipid_classes <- c("dhCer", "Cer", "dhSM", "SM", "HexCer", "LacCer")
+non_lcb_species_levels <- c(
+  "16:0", "18:0", "20:0", "22:0", "24:0", "24:1",
+  "d3-16:0", "d6-16:0",
+  "d7-16:0", "d7-24:0", "d7-24:1"
+)
+lcb_species_levels <- c(
+  "dhSph", "d3-dhSph", "d7-dhSph",
+  "Sph", "d3-Sph", "d7-Sph",
+  "S1P", "d7-S1P"
+)
+analysis_feature_type_levels <- c("LCB molecule", "Lipid species")
+timepoint_levels <- c(0.5, 1, 2, 4, 8)
+timepoint_labels <- c("0.5", "1", "2", "4", "8")
+timepoint_plot_breaks <- seq_along(timepoint_levels)
+
+format_analysis_feature <- function(lipid_class_short, species) {
+  ifelse(
+    as.character(lipid_class_short) == "LCB",
+    as.character(species),
+    paste(as.character(lipid_class_short), as.character(species))
+  )
+}
+
+species_sort_index <- function(species) {
+  species_levels <- c(lcb_species_levels, non_lcb_species_levels)
+  index <- match(as.character(species), species_levels)
+  ifelse(is.na(index), Inf, index)
+}
+
+add_timepoint_plot_position <- function(data) {
+  data |>
+    mutate(time_plot = match(time_h, timepoint_levels))
+}
+
+scale_timepoint_x <- function() {
+  scale_x_continuous(
+    breaks = timepoint_plot_breaks,
+    labels = timepoint_labels
+  )
+}
+
+if (write_outputs) {
+  dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+}
+
+write_csv_if_requested <- function(x, filename) {
+  if (write_outputs) {
+    write.csv(x, file.path(output_dir, filename), row.names = FALSE)
+  }
+  invisible(x)
+}
+
+save_plot_if_requested <- function(plot, filename, width = 10, height = 6) {
+  if (write_outputs) {
+    ggsave(
+      filename = file.path(output_dir, filename),
+      plot = plot,
+      width = width,
+      height = height,
+      units = "in",
+      dpi = 300,
+      bg = "white"
+    )
+  }
+  invisible(plot)
+}
+
+safe_file_part <- function(x) {
+  x |>
+    as.character() |>
+    str_replace_all("[^A-Za-z0-9]+", "_") |>
+    str_replace_all("_+", "_") |>
+    str_replace_all("^_|_$", "") |>
+    str_to_lower()
+}
+
+save_individual_panel_if_requested <- function(plot, path_stem, width = 4, height = 3) {
+  if (write_outputs && export_individual_panels) {
+    panel_dir <- dirname(file.path(output_dir, path_stem))
+    dir.create(panel_dir, recursive = TRUE, showWarnings = FALSE)
+
+    for (format in individual_panel_formats) {
+      ggsave(
+        filename = file.path(output_dir, paste0(path_stem, ".", format)),
+        plot = plot,
+        width = width,
+        height = height,
+        units = "in",
+        dpi = 300,
+        bg = "white"
+      )
+    }
+  }
+
+  invisible(plot)
+}
+
+format_curve_fdr_label <- function(p_value) {
+  case_when(
+    is.na(p_value) ~ "curve FDR = NA",
+    p_value < 0.001 ~ "curve FDR < 0.001",
+    TRUE ~ paste0("curve FDR = ", formatC(p_value, format = "f", digits = 3))
+  )
+}
+
+curve_label_positions <- function(summary_data, group_cols) {
+  summary_data |>
+    group_by(across(all_of(group_cols))) |>
+    summarise(
+      label_time = min(time_h, na.rm = TRUE),
+      y_min = min(pmax(mean_value - se_value, 0), na.rm = TRUE),
+      y_max = max(mean_value + se_value, na.rm = TRUE),
+      .groups = "drop"
+    ) |>
+    mutate(
+      label_x = timepoint_plot_breaks[match(label_time, timepoint_levels)],
+      label_x = ifelse(is.na(label_x), min(timepoint_plot_breaks), label_x),
+      y_range = ifelse(
+        is.finite(y_max - y_min) & y_max > y_min,
+        y_max - y_min,
+        pmax(abs(y_max), 1)
+      ),
+      label_y = ifelse(is.finite(y_max), y_max + 0.08 * y_range, NA_real_)
+    ) |>
+    select(-label_time, -y_min, -y_max, -y_range)
+}
+```
+
+## 3. Workbook Configuration
+
+The file paths can be supplied through the YAML parameters. If they are left
+blank, the notebook searches the project root and `data/` for one workbook
+containing `Pal-d3` and one workbook containing `d7-dhSph` in the filename.
+
+```{r workbook-config}
+resolve_input_file <- function(explicit_path, pattern, label) {
+  if (!identical(explicit_path, "") && !is.na(explicit_path)) {
+    if (!file.exists(explicit_path)) {
+      stop(label, " input file does not exist: ", explicit_path)
+    }
+    return(explicit_path)
+  }
+
+  candidates <- unlist(lapply(c(".", "data"), function(search_dir) {
+    list.files(
+      path = search_dir,
+      pattern = pattern,
+      full.names = TRUE,
+      ignore.case = TRUE
+    )
+  }), use.names = FALSE)
+  candidates <- candidates[!grepl("^~[$]", basename(candidates))]
+
+  if (length(candidates) != 1) {
+    stop(
+      "Set the input file for ", label,
+      ". Found candidates: ", paste(candidates, collapse = ", ")
+    )
+  }
+
+  candidates
+}
+
+pal_d3_file <- resolve_input_file(
+  explicit_path = params$pal_d3_input_file,
+  pattern = "Pal-d3.*[.]xlsx$",
+  label = "Pal-d3"
+)
+
+d7_dhsph_file <- resolve_input_file(
+  explicit_path = params$d7_dhsph_input_file,
+  pattern = "d7.*dhSph.*[.]xlsx$",
+  label = "d7-dhSph"
+)
+
+tracer_specs <- list(
+  pal_d3 = list(
+    experiment = "Pal-d3",
+    input_file = pal_d3_file,
+    sheet = "Tabelle1",
+    tracer = "Pal-d3",
+    tracer_regex = "d3[- ]?Palmitate",
+    isotope_regex = "^d[36]-",
+    labelled_readout_name = "labelled_flux_d3_plus_d6"
+  ),
+  d7_dhsph = list(
+    experiment = "d7-dhSph",
+    input_file = d7_dhsph_file,
+    sheet = "d7-dhSph",
+    tracer = "d7-dhSph",
+    tracer_regex = "d7[- ]?dhSph",
+    isotope_regex = "^d7-",
+    labelled_readout_name = "labelled_flux_d7"
+  )
+)
+
+block_specs <- list(
+  absolute = list(
+    block = "absolute",
+    unit = "pmol_per_sample",
+    class_row = 3,
+    header_row = 4,
+    data_start = 5,
+    data_end = 64
+  ),
+  normalized = list(
+    block = "normalized",
+    unit = "fmol_per_pmol_total_sphingolipids",
+    class_row = 69,
+    header_row = 70,
+    data_start = 71,
+    data_end = 130
+  )
+)
+
+blocks_to_import <- block_specs["absolute"]
+
+if (include_normalized_block) {
+  blocks_to_import <- block_specs
+}
+
+list(
+  pal_d3_file = pal_d3_file,
+  d7_dhsph_file = d7_dhsph_file,
+  blocks_to_import = names(blocks_to_import),
+  pseudovalue = pseudovalue
+)
+```
+
+## 4. Generic Import Functions
+
+These functions are intentionally tracer-generic. To add another isotope
+experiment later, define one additional entry in `tracer_specs` with the
+workbook, sheet, tracer-name regex, and isotope-label regex.
+
+```{r import-functions}
+clean_label <- function(x) {
+  str_squish(as.character(x))
+}
+
+fill_right <- function(x) {
+  out <- x
+  last <- NA_character_
+
+  for (i in seq_along(out)) {
+    if (!is.na(out[i]) && out[i] != "NA" && out[i] != "") {
+      last <- out[i]
+    }
+    out[i] <- last
+  }
+
+  out
+}
+
+make_lipid_id <- function(lipid_class_short, species_base, label_status) {
+  species_id <- species_base |>
+    str_replace_all(":", "_") |>
+    str_replace_all("[()]", "") |>
+    str_replace_all("[ /-]+", "_") |>
+    str_replace_all("[^A-Za-z0-9_]", "") |>
+    str_replace_all("_+", "_") |>
+    str_replace_all("^_|_$", "") |>
+    str_to_lower()
+
+  class_id <- lipid_class_short |>
+    str_replace_all("[^A-Za-z0-9]+", "_") |>
+    str_replace_all("_+", "_") |>
+    str_replace_all("^_|_$", "") |>
+    str_to_lower()
+
+  ifelse(
+    lipid_class_short == "LCB",
+    paste(label_status, species_id, sep = "_"),
+    paste(label_status, class_id, species_id, sep = "_")
+  )
+}
+
+class_short_name <- function(lipid_class) {
+  case_when(
+    lipid_class == "LCBs" ~ "LCB",
+    lipid_class == "Dihydroceramides (dhCer)" ~ "dhCer",
+    lipid_class == "Ceramides (Cer)" ~ "Cer",
+    lipid_class == "Dihydrosphingomyelins (dhSM)" ~ "dhSM",
+    lipid_class == "Sphingomyelins (SM)" ~ "SM",
+    lipid_class == "Hexosylceramides (HexCer)" ~ "HexCer",
+    lipid_class == "Lactosylceramides (LacCer)" ~ "LacCer",
+    lipid_class == "Total sphingolipid" ~ "Total sphingolipid",
+    TRUE ~ lipid_class
+  )
+}
+
+parse_tracer_block <- function(raw, spec, block) {
+  classes <- clean_label(unlist(raw[block$class_row, ]))
+  species <- clean_label(unlist(raw[block$header_row, ]))
+  classes_filled <- fill_right(classes)
+
+  column_map <- data.frame(
+    column_index = seq_along(species),
+    lipid_class = classes_filled,
+    species = species,
+    stringsAsFactors = FALSE
+  ) |>
+    filter(
+      column_index > 3,
+      !is.na(species),
+      species != "NA",
+      species != "",
+      !is.na(lipid_class)
+    ) |>
+    mutate(
+      lipid_class = ifelse(
+        str_detect(species, regex("total sphingolipid", ignore_case = TRUE)),
+        "Total sphingolipid",
+        lipid_class
+      ),
+      lipid_class_short = class_short_name(lipid_class),
+      label_status = case_when(
+        str_detect(species, "^d3-") ~ "labelled_d3",
+        str_detect(species, "^d6-") ~ "labelled_d6",
+        str_detect(species, "^d7-") ~ "labelled_d7",
+        TRUE ~ "unlabelled"
+      ),
+      label_group = ifelse(
+        str_detect(species, regex(spec$isotope_regex)),
+        "labelled",
+        "unlabelled"
+      ),
+      species_base = species |>
+        str_replace("^d3-", "") |>
+        str_replace("^d6-", "") |>
+        str_replace("^d7-", ""),
+      is_class_total = str_detect(species, regex(" total$", ignore_case = TRUE)),
+      is_global_total = str_detect(
+        species,
+        regex("total sphingolipid", ignore_case = TRUE)
+      ),
+      lipid_id = make_lipid_id(lipid_class_short, species_base, label_status)
+    )
+
+  data_block <- raw[block$data_start:block$data_end, , drop = FALSE]
+  names(data_block) <- paste0("V", seq_len(ncol(data_block)))
+
+  metadata <- tibble(
+    experiment = spec$experiment,
+    tracer = spec$tracer,
+    source_block = block$block,
+    unit = block$unit,
+    berlin_sample_id = suppressWarnings(as.integer(unlist(data_block[1]))),
+    sample_name = clean_label(unlist(data_block[2]))
+  ) |>
+    mutate(
+      time_h = as.numeric(str_match(sample_name, "(0[.]5|1|2|4|8)h")[, 2]),
+      replicate = str_match(sample_name, "R([123])")[, 2],
+      infection = ifelse(
+        str_detect(sample_name, regex("Sne", ignore_case = TRUE)),
+        "Infected",
+        "Uninfected"
+      ),
+      tracer_treatment = ifelse(
+        str_detect(sample_name, regex(spec$tracer_regex, ignore_case = TRUE)),
+        spec$tracer,
+        paste("No", spec$tracer)
+      ),
+      is_tracer_treated = tracer_treatment == spec$tracer,
+      sample_group = case_when(
+        infection == "Uninfected" & !is_tracer_treated ~ "Uninfected",
+        infection == "Uninfected" & is_tracer_treated ~
+          paste("Uninfected +", spec$tracer),
+        infection == "Infected" & !is_tracer_treated ~ "Infected",
+        infection == "Infected" & is_tracer_treated ~
+          paste("Infected +", spec$tracer),
+        TRUE ~ sample_name
+      )
+    )
+
+  value_block <- data_block[, column_map$column_index, drop = FALSE]
+  names(value_block) <- paste0("C", column_map$column_index)
+
+  bind_cols(metadata, value_block) |>
+    pivot_longer(
+      cols = starts_with("C"),
+      names_to = "column_key",
+      values_to = "value"
+    ) |>
+    mutate(
+      column_index = as.integer(str_remove(column_key, "^C")),
+      value = suppressWarnings(as.numeric(value))
+    ) |>
+    left_join(column_map, by = "column_index") |>
+    select(
+      experiment,
+      tracer,
+      source_block,
+      unit,
+      berlin_sample_id,
+      sample_name,
+      sample_group,
+      infection,
+      tracer_treatment,
+      is_tracer_treated,
+      time_h,
+      replicate,
+      lipid_class,
+      lipid_class_short,
+      species,
+      species_base,
+      lipid_id,
+      label_status,
+      label_group,
+      is_class_total,
+      is_global_total,
+      value
+    ) |>
+    mutate(
+      value_log10 = log10(value + pseudovalue),
+      infection = factor(infection, levels = c("Uninfected", "Infected")),
+      lipid_class_short = factor(
+        lipid_class_short,
+        levels = c(
+          "LCB", "dhCer", "Cer", "dhSM", "SM", "HexCer", "LacCer",
+          "Total sphingolipid"
+        )
+      )
+    )
+}
+
+read_tracer_workbook <- function(spec, blocks) {
+  raw <- read_excel(
+    spec$input_file,
+    sheet = spec$sheet,
+    col_names = FALSE,
+    guess_max = 1000
+  )
+
+  block_tables <- lapply(blocks, function(block) {
+    parse_tracer_block(raw = raw, spec = spec, block = block)
+  })
+
+  bind_rows(block_tables)
+}
+```
+
+## 5. Create Shared Data Frames
+
+```{r create-data-frames}
+flux_long <- bind_rows(lapply(tracer_specs, read_tracer_workbook, blocks = blocks_to_import)) |>
+  mutate(
+    experiment = factor(experiment, levels = c("Pal-d3", "d7-dhSph"))
+  )
+
+flux_absolute_long <- flux_long |>
+  filter(unit == "pmol_per_sample")
+
+sample_design <- flux_absolute_long |>
+  distinct(
+    experiment,
+    tracer,
+    berlin_sample_id,
+    sample_name,
+    sample_group,
+    infection,
+    tracer_treatment,
+    is_tracer_treated,
+    time_h,
+    replicate
+  ) |>
+  arrange(experiment, replicate, time_h, sample_group)
+
+unlabelled_class <- flux_absolute_long |>
+  filter(
+    lipid_class_short %in% non_lcb_lipid_classes,
+    label_group == "unlabelled",
+    !is_class_total,
+    !is_global_total
+  ) |>
+  group_by(
+    experiment,
+    tracer,
+    berlin_sample_id,
+    sample_name,
+    sample_group,
+    infection,
+    tracer_treatment,
+    is_tracer_treated,
+    time_h,
+    replicate,
+    unit,
+    lipid_class_short
+  ) |>
+  summarise(
+    readout = "unlabelled_abundance",
+    readout_label = "Unlabelled abundance",
+    value = sum(value, na.rm = TRUE),
+    contributing_species = paste(sort(unique(species)), collapse = ";"),
+    .groups = "drop"
+  )
+
+labelled_class <- flux_absolute_long |>
+  filter(
+    lipid_class_short %in% non_lcb_lipid_classes,
+    label_group == "labelled",
+    !is_class_total,
+    !is_global_total
+  ) |>
+  group_by(
+    experiment,
+    tracer,
+    berlin_sample_id,
+    sample_name,
+    sample_group,
+    infection,
+    tracer_treatment,
+    is_tracer_treated,
+    time_h,
+    replicate,
+    unit,
+    lipid_class_short
+  ) |>
+  summarise(
+    readout = "labelled_incorporation",
+    readout_label = ifelse(
+      first(experiment) == "Pal-d3",
+      "labelled_flux_d3_plus_d6",
+      "labelled_flux_d7"
+    ),
+    value = sum(value, na.rm = TRUE),
+    contributing_species = paste(sort(unique(species)), collapse = ";"),
+    .groups = "drop"
+  )
+
+class_total <- flux_absolute_long |>
+  filter(
+    lipid_class_short %in% non_lcb_lipid_classes,
+    is_class_total,
+    !is_global_total
+  ) |>
+  transmute(
+    experiment,
+    tracer,
+    berlin_sample_id,
+    sample_name,
+    sample_group,
+    infection,
+    tracer_treatment,
+    is_tracer_treated,
+    time_h,
+    replicate,
+    unit,
+    lipid_class_short,
+    readout = "class_total_in_workbook",
+    readout_label = "Class total in workbook",
+    value,
+    contributing_species = species
+  )
+
+flux_class_readouts <- bind_rows(unlabelled_class, labelled_class, class_total) |>
+  mutate(
+    pseudovalue = pseudovalue,
+    value_log10 = log10(value + pseudovalue),
+    readout = factor(
+      readout,
+      levels = c(
+        "labelled_incorporation",
+        "unlabelled_abundance",
+        "class_total_in_workbook"
+      )
+    ),
+    lipid_class_short = factor(
+      lipid_class_short,
+      levels = non_lcb_lipid_classes
+    )
+  ) |>
+  arrange(experiment, readout, lipid_class_short, replicate, time_h, sample_group)
+
+flux_lcb_readouts <- flux_absolute_long |>
+  filter(
+    lipid_class_short == "LCB",
+    label_group %in% c("labelled", "unlabelled"),
+    !is_class_total,
+    !is_global_total
+  ) |>
+  transmute(
+    experiment,
+    tracer,
+    berlin_sample_id,
+    sample_name,
+    sample_group,
+    infection,
+    tracer_treatment,
+    is_tracer_treated,
+    time_h,
+    replicate,
+    unit,
+    lipid_class_short,
+    species,
+    species_base,
+    label_status,
+    label_group,
+    readout = ifelse(
+      label_group == "labelled",
+      "labelled_incorporation",
+      "unlabelled_abundance"
+    ),
+    readout_label = case_when(
+      label_group == "labelled" & experiment == "Pal-d3" ~ "labelled_LCB_d3",
+      label_group == "labelled" & experiment == "d7-dhSph" ~ "labelled_LCB_d7",
+      TRUE ~ "Unlabelled LCB molecule"
+    ),
+    value,
+    contributing_species = species
+  ) |>
+  mutate(
+    pseudovalue = pseudovalue,
+    value_log10 = log10(value + pseudovalue),
+    species = factor(species, levels = lcb_species_levels),
+    lipid_class_short = factor(lipid_class_short, levels = "LCB")
+  ) |>
+  arrange(experiment, readout, species, replicate, time_h, sample_group)
+
+flux_species_readouts <- flux_absolute_long |>
+  filter(
+    lipid_class_short %in% non_lcb_lipid_classes,
+    label_group %in% c("labelled", "unlabelled"),
+    !is_class_total,
+    !is_global_total
+  ) |>
+  transmute(
+    experiment,
+    tracer,
+    berlin_sample_id,
+    sample_name,
+    sample_group,
+    infection,
+    tracer_treatment,
+    is_tracer_treated,
+    time_h,
+    replicate,
+    unit,
+    lipid_class_short,
+    species,
+    species_base,
+    label_status,
+    label_group,
+    readout = ifelse(
+      label_group == "labelled",
+      "labelled_incorporation",
+      "unlabelled_abundance"
+    ),
+    readout_label = case_when(
+      label_group == "labelled" & experiment == "Pal-d3" ~ "labelled_species_d3_plus_d6",
+      label_group == "labelled" & experiment == "d7-dhSph" ~ "labelled_species_d7",
+      TRUE ~ "Unlabelled lipid species"
+    ),
+    value,
+    contributing_species = species
+  ) |>
+  mutate(
+    pseudovalue = pseudovalue,
+    value_log10 = log10(value + pseudovalue),
+    lipid_class_short = factor(lipid_class_short, levels = non_lcb_lipid_classes)
+  ) |>
+  arrange(
+    experiment,
+    readout,
+    lipid_class_short,
+    species_sort_index(species),
+    species,
+    replicate,
+    time_h,
+    sample_group
+  )
+
+flux_analysis_readouts_unfactored <- bind_rows(
+  flux_lcb_readouts |>
+    mutate(
+      feature_type = "LCB molecule",
+      feature_name = format_analysis_feature(lipid_class_short, species)
+    ),
+  flux_species_readouts |>
+    mutate(
+      feature_type = "Lipid species",
+      feature_name = format_analysis_feature(lipid_class_short, species)
+    )
+)
+
+analysis_feature_levels <- flux_analysis_readouts_unfactored |>
+  distinct(feature_type, lipid_class_short, species, feature_name) |>
+  mutate(
+    feature_type = factor(feature_type, levels = analysis_feature_type_levels),
+    lipid_class_short = factor(
+      lipid_class_short,
+      levels = c("LCB", non_lcb_lipid_classes)
+    ),
+    species_order = species_sort_index(species)
+  ) |>
+  arrange(feature_type, lipid_class_short, species_order, feature_name) |>
+  pull(feature_name) |>
+  unique()
+
+flux_analysis_readouts <- flux_analysis_readouts_unfactored |>
+  mutate(
+    feature_type = factor(feature_type, levels = analysis_feature_type_levels),
+    feature_name = factor(feature_name, levels = analysis_feature_levels),
+    readout = factor(
+      readout,
+      levels = c("labelled_incorporation", "unlabelled_abundance")
+    )
+  ) |>
+  arrange(experiment, readout, feature_name, replicate, time_h, sample_group)
+
+flux_labelled_species <- flux_absolute_long |>
+  filter(
+    label_group == "labelled",
+    !is_class_total,
+    !is_global_total
+  ) |>
+  mutate(
+    value_log10 = log10(value + pseudovalue),
+    lipid_class_short = factor(
+      lipid_class_short,
+      levels = c("LCB", "dhCer", "Cer", "dhSM", "SM", "HexCer", "LacCer")
+    )
+  ) |>
+  arrange(experiment, lipid_class_short, species, replicate, time_h, sample_group)
+
+labelled_fraction <- labelled_class |>
+  select(
+    experiment,
+    tracer,
+    berlin_sample_id,
+    sample_name,
+    sample_group,
+    infection,
+    tracer_treatment,
+    is_tracer_treated,
+    time_h,
+    replicate,
+    lipid_class_short,
+    labelled_value = value
+  ) |>
+  inner_join(
+    class_total |>
+      select(
+        experiment,
+        berlin_sample_id,
+        lipid_class_short,
+        class_total_value = value
+      ),
+    by = c("experiment", "berlin_sample_id", "lipid_class_short")
+  ) |>
+  mutate(
+    labelled_fraction = ifelse(
+      class_total_value > 0,
+      labelled_value / class_total_value,
+      NA_real_
+    )
+  )
+
+write_csv_if_requested(sample_design, "sample_design.csv")
+write_csv_if_requested(flux_long, "flux_long.csv")
+write_csv_if_requested(flux_absolute_long, "flux_absolute_long.csv")
+write_csv_if_requested(flux_class_readouts, "flux_class_readouts.csv")
+write_csv_if_requested(flux_lcb_readouts, "flux_lcb_readouts.csv")
+write_csv_if_requested(flux_species_readouts, "flux_species_readouts.csv")
+write_csv_if_requested(flux_analysis_readouts, "flux_analysis_readouts.csv")
+write_csv_if_requested(flux_labelled_species, "flux_labelled_species.csv")
+write_csv_if_requested(labelled_fraction, "labelled_fraction.csv")
+
+list(
+  sample_design_rows = nrow(sample_design),
+  flux_long_rows = nrow(flux_long),
+  flux_absolute_long_rows = nrow(flux_absolute_long),
+  flux_class_readout_rows = nrow(flux_class_readouts),
+  flux_lcb_readout_rows = nrow(flux_lcb_readouts),
+  flux_species_readout_rows = nrow(flux_species_readouts),
+  flux_analysis_readout_rows = nrow(flux_analysis_readouts),
+  labelled_species_rows = nrow(flux_labelled_species)
+)
+```
+
+## 6. Import Checks
+
+```{r import-checks}
+sample_design |>
+  count(experiment, tracer_treatment, infection, time_h) |>
+  arrange(experiment, tracer_treatment, infection, time_h)
+
+flux_absolute_long |>
+  count(experiment, lipid_class_short, label_status) |>
+  arrange(experiment, lipid_class_short, label_status)
+
+no_tracer_label_check <- flux_labelled_species |>
+  filter(!is_tracer_treated) |>
+  group_by(experiment) |>
+  summarise(
+    nonzero_labelled_rows = sum(!is.na(value) & value != 0),
+    max_labelled_value = max(value, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+no_tracer_label_check
+```
+
+## 7. Time-Course Summaries
+
+```{r timecourse-summaries}
+mean_se <- function(x) {
+  sd(x, na.rm = TRUE) / sqrt(sum(!is.na(x)))
+}
+
+flux_class_summary <- flux_class_readouts |>
+  group_by(
+    experiment,
+    tracer,
+    readout,
+    readout_label,
+    lipid_class_short,
+    infection,
+    tracer_treatment,
+    is_tracer_treated,
+    time_h
+  ) |>
+  summarise(
+    mean_value = mean(value, na.rm = TRUE),
+    sd_value = sd(value, na.rm = TRUE),
+    n = sum(!is.na(value)),
+    se_value = mean_se(value),
+    ci_95 = qt(0.975, df = pmax(n - 1, 1)) * se_value,
+    ci_low = pmax(mean_value - ci_95, 0),
+    ci_high = mean_value + ci_95,
+    mean_log10 = mean(value_log10, na.rm = TRUE),
+    se_log10 = mean_se(value_log10),
+    .groups = "drop"
+  )
+
+flux_lcb_summary <- flux_lcb_readouts |>
+  group_by(
+    experiment,
+    tracer,
+    readout,
+    readout_label,
+    lipid_class_short,
+    species,
+    infection,
+    tracer_treatment,
+    is_tracer_treated,
+    time_h
+  ) |>
+  summarise(
+    mean_value = mean(value, na.rm = TRUE),
+    sd_value = sd(value, na.rm = TRUE),
+    n = sum(!is.na(value)),
+    se_value = mean_se(value),
+    ci_95 = qt(0.975, df = pmax(n - 1, 1)) * se_value,
+    ci_low = pmax(mean_value - ci_95, 0),
+    ci_high = mean_value + ci_95,
+    mean_log10 = mean(value_log10, na.rm = TRUE),
+    se_log10 = mean_se(value_log10),
+    .groups = "drop"
+  )
+
+flux_species_summary <- flux_species_readouts |>
+  group_by(
+    experiment,
+    tracer,
+    readout,
+    readout_label,
+    lipid_class_short,
+    species,
+    species_base,
+    label_status,
+    label_group,
+    infection,
+    tracer_treatment,
+    is_tracer_treated,
+    time_h
+  ) |>
+  summarise(
+    mean_value = mean(value, na.rm = TRUE),
+    sd_value = sd(value, na.rm = TRUE),
+    n = sum(!is.na(value)),
+    se_value = mean_se(value),
+    ci_95 = qt(0.975, df = pmax(n - 1, 1)) * se_value,
+    ci_low = pmax(mean_value - ci_95, 0),
+    ci_high = mean_value + ci_95,
+    mean_log10 = mean(value_log10, na.rm = TRUE),
+    se_log10 = mean_se(value_log10),
+    .groups = "drop"
+  )
+
+flux_analysis_summary <- flux_analysis_readouts |>
+  group_by(
+    experiment,
+    tracer,
+    readout,
+    readout_label,
+    feature_type,
+    feature_name,
+    lipid_class_short,
+    species,
+    species_base,
+    label_status,
+    label_group,
+    infection,
+    tracer_treatment,
+    is_tracer_treated,
+    time_h
+  ) |>
+  summarise(
+    mean_value = mean(value, na.rm = TRUE),
+    sd_value = sd(value, na.rm = TRUE),
+    n = sum(!is.na(value)),
+    se_value = mean_se(value),
+    ci_95 = qt(0.975, df = pmax(n - 1, 1)) * se_value,
+    ci_low = pmax(mean_value - ci_95, 0),
+    ci_high = mean_value + ci_95,
+    mean_log10 = mean(value_log10, na.rm = TRUE),
+    se_log10 = mean_se(value_log10),
+    contributing_species = paste(sort(unique(contributing_species)), collapse = ";"),
+    .groups = "drop"
+  )
+
+flux_labelled_species_summary <- flux_labelled_species |>
+  group_by(
+    experiment,
+    tracer,
+    lipid_class_short,
+    species,
+    infection,
+    tracer_treatment,
+    is_tracer_treated,
+    time_h
+  ) |>
+  summarise(
+    mean_value = mean(value, na.rm = TRUE),
+    sd_value = sd(value, na.rm = TRUE),
+    n = sum(!is.na(value)),
+    se_value = mean_se(value),
+    ci_95 = qt(0.975, df = pmax(n - 1, 1)) * se_value,
+    ci_low = pmax(mean_value - ci_95, 0),
+    ci_high = mean_value + ci_95,
+    mean_log10 = mean(value_log10, na.rm = TRUE),
+    se_log10 = mean_se(value_log10),
+    .groups = "drop"
+  )
+
+write_csv_if_requested(flux_class_summary, "flux_class_summary.csv")
+write_csv_if_requested(flux_lcb_summary, "flux_lcb_summary.csv")
+write_csv_if_requested(flux_species_summary, "flux_species_summary.csv")
+write_csv_if_requested(flux_analysis_summary, "flux_analysis_summary.csv")
+write_csv_if_requested(flux_labelled_species_summary, "flux_labelled_species_summary.csv")
+
+flux_analysis_summary |>
+  filter(readout == "labelled_incorporation", is_tracer_treated) |>
+  select(
+    experiment,
+    feature_type,
+    feature_name,
+    infection,
+    time_h,
+    mean_value,
+    se_value,
+    n
+  ) |>
+  arrange(experiment, feature_name, time_h, infection)
+```
+
+## 8. AUC Analysis
+
+AUC is calculated with the trapezoid rule from the observed timepoints
+0.5-8 h. This summarizes total labelled incorporation across the time course.
+It should be interpreted alongside the time-course plots, not as a replacement
+for the time element.
+
+```{r auc-analysis}
+trapezoid_auc <- function(time, value) {
+  ok <- !is.na(time) & !is.na(value)
+  time <- time[ok]
+  value <- value[ok]
+
+  if (length(time) < 2) {
+    return(NA_real_)
+  }
+
+  order_index <- order(time)
+  time <- time[order_index]
+  value <- value[order_index]
+
+  sum(diff(time) * (head(value, -1) + tail(value, -1)) / 2)
+}
+
+auc_by_replicate <- flux_analysis_readouts |>
+  filter(
+    readout == "labelled_incorporation",
+    is_tracer_treated
+  ) |>
+  group_by(
+    experiment,
+    tracer,
+    feature_type,
+    feature_name,
+    infection,
+    replicate
+  ) |>
+  summarise(
+    auc_value_h = trapezoid_auc(time_h, value),
+    auc_log10_h = trapezoid_auc(time_h, value_log10),
+    .groups = "drop"
+  )
+
+auc_summary <- auc_by_replicate |>
+  group_by(experiment, tracer, feature_type, feature_name, infection) |>
+  summarise(
+    mean_auc = mean(auc_value_h, na.rm = TRUE),
+    sd_auc = sd(auc_value_h, na.rm = TRUE),
+    se_auc = mean_se(auc_value_h),
+    n = sum(!is.na(auc_value_h)),
+    .groups = "drop"
+  )
+
+auc_ratio_summary <- auc_summary |>
+  select(experiment, tracer, feature_type, feature_name, infection, mean_auc, se_auc, n) |>
+  pivot_wider(
+    names_from = infection,
+    values_from = c(mean_auc, se_auc, n)
+  ) |>
+  mutate(
+    infected_over_uninfected_auc = mean_auc_Infected / mean_auc_Uninfected
+  ) |>
+  arrange(experiment, feature_name)
+
+write_csv_if_requested(auc_by_replicate, "auc_by_replicate.csv")
+write_csv_if_requested(auc_summary, "auc_summary.csv")
+write_csv_if_requested(auc_ratio_summary, "auc_ratio_summary.csv")
+
+auc_ratio_summary
+```
+
+## 9. Timepoint-Level Tests
+
+These first-pass tests compare infected versus uninfected samples at each
+timepoint within each tracer and analysis feature. They fit a linear model on
+`log10(value + pseudovalue)`, then use `emmeans` to extract the explicit
+pairwise contrast `Infected - Uninfected`. The raw pairwise p-values are
+calculated once, then two separate FDR chunks apply different multiple-testing
+families. The primary table uses experiment-level BH-FDR across all
+species/timepoint tests within each tracer experiment because these lipid
+features are biologically related. A panel-level correction is retained only as
+a secondary sensitivity view.
+
+```{r timepoint-pairwise-tests}
+empty_timepoint_pairwise <- function() {
+  tibble(
+    contrast = "Infected - Uninfected",
+    estimate_log10_infected_minus_uninfected = NA_real_,
+    se_log10 = NA_real_,
+    df = NA_real_,
+    t_ratio = NA_real_,
+    lower_cl_log10 = NA_real_,
+    upper_cl_log10 = NA_real_,
+    ratio_infected_over_uninfected = NA_real_,
+    ratio_lower_95 = NA_real_,
+    ratio_upper_95 = NA_real_,
+    p_value = NA_real_,
+    pairwise_method = "emmeans pairwise contrast",
+    model_status = "not_estimable"
+  )
+}
+
+safe_infection_pairwise <- function(data) {
+  data <- data |>
+    filter(!is.na(value_log10), !is.na(infection)) |>
+    mutate(infection = factor(infection, levels = c("Uninfected", "Infected")))
+
+  if (n_distinct(data$infection) < 2 || nrow(data) < 4) {
+    return(empty_timepoint_pairwise())
+  }
+
+  fit <- tryCatch(
+    lm(value_log10 ~ infection, data = data),
+    error = function(e) NULL
+  )
+
+  if (is.null(fit)) {
+    return(empty_timepoint_pairwise())
+  }
+
+  residual_deviance <- deviance(fit)
+  response_scale <- max(1, sum(data$value_log10^2, na.rm = TRUE))
+  if (residual_deviance <= 100 * .Machine$double.eps * response_scale) {
+    estimate <- mean(data$value_log10[data$infection == "Infected"]) -
+      mean(data$value_log10[data$infection == "Uninfected"])
+    return(tibble(
+      contrast = "Infected - Uninfected",
+      estimate_log10_infected_minus_uninfected = estimate,
+      se_log10 = NA_real_,
+      df = NA_real_,
+      t_ratio = NA_real_,
+      lower_cl_log10 = NA_real_,
+      upper_cl_log10 = NA_real_,
+      ratio_infected_over_uninfected = 10^estimate,
+      ratio_lower_95 = NA_real_,
+      ratio_upper_95 = NA_real_,
+      p_value = NA_real_,
+      pairwise_method = "not estimated: zero or near-zero residual variance",
+      model_status = "zero_or_near_zero_residual_variance"
+    ))
+  }
+
+  em <- tryCatch(
+    emmeans(fit, ~ infection),
+    error = function(e) NULL
+  )
+
+  if (is.null(em)) {
+    return(empty_timepoint_pairwise())
+  }
+
+  pairwise <- tryCatch(
+    contrast(
+      em,
+      method = list("Infected - Uninfected" = c(-1, 1)),
+      adjust = "none"
+    ),
+    error = function(e) NULL
+  )
+
+  if (is.null(pairwise)) {
+    return(empty_timepoint_pairwise())
+  }
+
+  pairwise_summary <- summary(pairwise, infer = c(TRUE, TRUE)) |>
+    as_tibble()
+
+  if (nrow(pairwise_summary) == 0) {
+    return(empty_timepoint_pairwise())
+  }
+
+  get_pairwise_col <- function(name) {
+    if (name %in% names(pairwise_summary)) {
+      pairwise_summary[[name]][1]
+    } else {
+      NA_real_
+    }
+  }
+
+  estimate <- get_pairwise_col("estimate")
+  lower_cl <- get_pairwise_col("lower.CL")
+  upper_cl <- get_pairwise_col("upper.CL")
+
+  tibble(
+    contrast = as.character(pairwise_summary$contrast[1]),
+    estimate_log10_infected_minus_uninfected = estimate,
+    se_log10 = get_pairwise_col("SE"),
+    df = get_pairwise_col("df"),
+    t_ratio = get_pairwise_col("t.ratio"),
+    lower_cl_log10 = lower_cl,
+    upper_cl_log10 = upper_cl,
+    ratio_infected_over_uninfected = 10^estimate,
+    ratio_lower_95 = 10^lower_cl,
+    ratio_upper_95 = 10^upper_cl,
+    p_value = get_pairwise_col("p.value"),
+    pairwise_method = "emmeans pairwise contrast",
+    model_status = "estimated"
+  )
+}
+
+timepoint_pairwise_raw <- flux_analysis_readouts |>
+  filter(
+    readout == "labelled_incorporation",
+    is_tracer_treated
+  ) |>
+  group_by(experiment, tracer, feature_type, feature_name, time_h) |>
+  group_modify(~ safe_infection_pairwise(.x)) |>
+  ungroup() |>
+  arrange(experiment, feature_name, time_h)
+
+write_csv_if_requested(
+  timepoint_pairwise_raw,
+  "timepoint_pairwise_emmeans_raw_labelled_incorporation.csv"
+)
+
+timepoint_pairwise_raw
+```
+
+### 9.1 Experiment-Level Timepoint FDR
+
+This is the primary timepoint table. All infected-versus-uninfected timepoint
+comparisons within the same tracer experiment are treated as one
+multiple-testing family.
+
+For the selected Pal-d3 fractional-incorporation endpoints, a separate
+absolute-abundance analysis pools the d3 and d6 16:0 species before these
+timepoint tests. Run `scripts/pal_d3_pooled_absolute_analysis.R` after
+generating `flux_absolute_long.csv`; see its `ANALYSIS_AND_RESULTS.md` output.
+For pooled d7-labelled class endpoints, run
+`scripts/d7_pooled_absolute_analysis.R`. The table below remains the
+individual-species analysis.
+
+```{r timepoint-experiment-fdr}
+timepoint_tests <- timepoint_pairwise_raw |>
+  group_by(experiment) |>
+  mutate(
+    p_fdr = p.adjust(p_value, method = "BH"),
+    fdr_method = "BH within experiment across species and timepoints"
+  ) |>
+  ungroup() |>
+  arrange(experiment, feature_name, time_h)
+
+write_csv_if_requested(timepoint_tests, "timepoint_tests_labelled_incorporation.csv")
+write_csv_if_requested(
+  timepoint_tests,
+  "timepoint_pairwise_emmeans_labelled_incorporation.csv"
+)
+write_csv_if_requested(
+  timepoint_tests,
+  "timepoint_tests_experiment_fdr_labelled_incorporation.csv"
+)
+write_csv_if_requested(
+  timepoint_tests,
+  "timepoint_pairwise_emmeans_experiment_fdr_labelled_incorporation.csv"
+)
+
+timepoint_tests
+```
+
+### 9.2 Panel-Level Timepoint FDR
+
+This secondary table treats each plotted species/readout panel as its own
+hypothesis family and applies BH-FDR across sampled timepoints within that
+panel. It is kept for comparison with older panel-wise summaries.
+
+```{r timepoint-panel-fdr}
+timepoint_tests_panel_fdr <- timepoint_pairwise_raw |>
+  group_by(experiment, tracer, feature_type, feature_name) |>
+  mutate(
+    p_fdr = p.adjust(p_value, method = "BH"),
+    fdr_method = "BH within species panel across timepoints"
+  ) |>
+  ungroup() |>
+  arrange(experiment, feature_name, time_h)
+
+write_csv_if_requested(
+  timepoint_tests_panel_fdr,
+  "timepoint_tests_panel_fdr_labelled_incorporation.csv"
+)
+write_csv_if_requested(
+  timepoint_tests_panel_fdr,
+  "timepoint_pairwise_emmeans_panel_fdr_labelled_incorporation.csv"
+)
+
+timepoint_tests_panel_fdr
+```
+
+## 10. Infection-by-Time Models
+
+These models ask whether each plotted readout differs by infection, time, and
+infection-by-time interaction for each tracer and analysis feature. The plotted
+`curve FDR` annotation comes from the `infection:time_f` term.
+
+```{r infection-time-models}
+safe_infection_time_model <- function(data) {
+  data <- data |>
+    filter(!is.na(value_log10), !is.na(infection), !is.na(time_h)) |>
+    mutate(
+      infection = factor(infection, levels = c("Uninfected", "Infected")),
+      time_f = factor(time_h)
+    )
+
+  if (n_distinct(data$infection) < 2 || n_distinct(data$time_f) < 2) {
+    return(tibble(
+      p_infection = NA_real_,
+      p_time = NA_real_,
+      p_infection_time = NA_real_,
+      model_status = "not_estimable"
+    ))
+  }
+
+  fit <- tryCatch(
+    lm(value_log10 ~ infection * time_f, data = data),
+    error = function(e) NULL
+  )
+
+  if (is.null(fit)) {
+    return(tibble(
+      p_infection = NA_real_,
+      p_time = NA_real_,
+      p_infection_time = NA_real_,
+      model_status = "not_estimable"
+    ))
+  }
+
+  residual_deviance <- deviance(fit)
+  response_scale <- max(1, sum(data$value_log10^2, na.rm = TRUE))
+  if (residual_deviance <= 100 * .Machine$double.eps * response_scale) {
+    return(tibble(
+      p_infection = NA_real_,
+      p_time = NA_real_,
+      p_infection_time = NA_real_,
+      model_status = "zero_or_near_zero_residual_variance"
+    ))
+  }
+
+  a <- anova(fit)
+
+  tibble(
+    p_infection = a["infection", "Pr(>F)"],
+    p_time = a["time_f", "Pr(>F)"],
+    p_infection_time = a["infection:time_f", "Pr(>F)"],
+    model_status = "estimated"
+  )
+}
+
+infection_time_models_all_readouts <- flux_analysis_readouts |>
+  filter(
+    readout %in% c("labelled_incorporation", "unlabelled_abundance"),
+    is_tracer_treated
+  ) |>
+  group_by(experiment, tracer, readout, readout_label, feature_type, feature_name) |>
+  group_modify(~ safe_infection_time_model(.x)) |>
+  ungroup() |>
+  group_by(experiment, readout) |>
+  mutate(
+    p_fdr_infection = p.adjust(p_infection, method = "BH"),
+    p_fdr_time = p.adjust(p_time, method = "BH"),
+    p_fdr_infection_time = p.adjust(p_infection_time, method = "BH")
+  ) |>
+  ungroup() |>
+  arrange(experiment, readout, feature_name)
+
+curve_fdr_labels <- infection_time_models_all_readouts |>
+  transmute(
+    experiment,
+    tracer,
+    readout,
+    feature_type,
+    feature_name,
+    curve_fdr = p_fdr_infection_time,
+    curve_fdr_label = format_curve_fdr_label(p_fdr_infection_time)
+  )
+
+infection_time_models <- infection_time_models_all_readouts |>
+  filter(readout == "labelled_incorporation") |>
+  select(
+    experiment,
+    tracer,
+    feature_type,
+    feature_name,
+    p_infection,
+    p_time,
+    p_infection_time,
+    p_fdr_infection,
+    p_fdr_time,
+    p_fdr_infection_time
+  )
+
+write_csv_if_requested(
+  infection_time_models_all_readouts,
+  "infection_time_models_all_readouts.csv"
+)
+write_csv_if_requested(infection_time_models, "infection_time_models.csv")
+write_csv_if_requested(curve_fdr_labels, "curve_fdr_labels.csv")
+
+infection_time_models
+```
+
+## 10.1 Normalized Block Sensitivity Analysis
+
+This section repeats the main labelled/unlabelled workflow on the normalized
+`fmol / pmol total sphingolipids` block when that block is imported. It is a
+sensitivity check only: normalized results are kept in separate output tables
+and are compared back to the primary absolute `pmol / sample` results.
+
+```{r normalized-sensitivity-analysis}
+make_analysis_readouts_from_long <- function(source_long) {
+  empty <- list(
+    class_readouts = tibble(),
+    lcb_readouts = tibble(),
+    species_readouts = tibble(),
+    analysis_readouts = tibble(),
+    labelled_species = tibble()
+  )
+
+  if (nrow(source_long) == 0) {
+    return(empty)
+  }
+
+  unit_unlabelled_class <- source_long |>
+    filter(
+      lipid_class_short %in% non_lcb_lipid_classes,
+      label_group == "unlabelled",
+      !is_class_total,
+      !is_global_total
+    ) |>
+    group_by(
+      experiment,
+      tracer,
+      berlin_sample_id,
+      sample_name,
+      sample_group,
+      infection,
+      tracer_treatment,
+      is_tracer_treated,
+      time_h,
+      replicate,
+      unit,
+      lipid_class_short
+    ) |>
+    summarise(
+      readout = "unlabelled_abundance",
+      readout_label = "Unlabelled abundance",
+      value = sum(value, na.rm = TRUE),
+      contributing_species = paste(sort(unique(species)), collapse = ";"),
+      .groups = "drop"
+    )
+
+  unit_labelled_class <- source_long |>
+    filter(
+      lipid_class_short %in% non_lcb_lipid_classes,
+      label_group == "labelled",
+      !is_class_total,
+      !is_global_total
+    ) |>
+    group_by(
+      experiment,
+      tracer,
+      berlin_sample_id,
+      sample_name,
+      sample_group,
+      infection,
+      tracer_treatment,
+      is_tracer_treated,
+      time_h,
+      replicate,
+      unit,
+      lipid_class_short
+    ) |>
+    summarise(
+      readout = "labelled_incorporation",
+      readout_label = ifelse(
+        first(experiment) == "Pal-d3",
+        "labelled_flux_d3_plus_d6",
+        "labelled_flux_d7"
+      ),
+      value = sum(value, na.rm = TRUE),
+      contributing_species = paste(sort(unique(species)), collapse = ";"),
+      .groups = "drop"
+    )
+
+  unit_class_total <- source_long |>
+    filter(
+      lipid_class_short %in% non_lcb_lipid_classes,
+      is_class_total,
+      !is_global_total
+    ) |>
+    transmute(
+      experiment,
+      tracer,
+      berlin_sample_id,
+      sample_name,
+      sample_group,
+      infection,
+      tracer_treatment,
+      is_tracer_treated,
+      time_h,
+      replicate,
+      unit,
+      lipid_class_short,
+      readout = "class_total_in_workbook",
+      readout_label = "Class total in workbook",
+      value,
+      contributing_species = species
+    )
+
+  unit_class_readouts <- bind_rows(
+    unit_unlabelled_class,
+    unit_labelled_class,
+    unit_class_total
+  ) |>
+    mutate(
+      pseudovalue = pseudovalue,
+      value_log10 = log10(value + pseudovalue),
+      readout = factor(
+        readout,
+        levels = c(
+          "labelled_incorporation",
+          "unlabelled_abundance",
+          "class_total_in_workbook"
+        )
+      ),
+      lipid_class_short = factor(lipid_class_short, levels = non_lcb_lipid_classes)
+    ) |>
+    arrange(experiment, readout, lipid_class_short, replicate, time_h, sample_group)
+
+  unit_lcb_readouts <- source_long |>
+    filter(
+      lipid_class_short == "LCB",
+      label_group %in% c("labelled", "unlabelled"),
+      !is_class_total,
+      !is_global_total
+    ) |>
+    transmute(
+      experiment,
+      tracer,
+      berlin_sample_id,
+      sample_name,
+      sample_group,
+      infection,
+      tracer_treatment,
+      is_tracer_treated,
+      time_h,
+      replicate,
+      unit,
+      lipid_class_short,
+      species,
+      species_base,
+      label_status,
+      label_group,
+      readout = ifelse(
+        label_group == "labelled",
+        "labelled_incorporation",
+        "unlabelled_abundance"
+      ),
+      readout_label = case_when(
+        label_group == "labelled" & experiment == "Pal-d3" ~ "labelled_LCB_d3",
+        label_group == "labelled" & experiment == "d7-dhSph" ~ "labelled_LCB_d7",
+        TRUE ~ "Unlabelled LCB molecule"
+      ),
+      value,
+      contributing_species = species
+    ) |>
+    mutate(
+      pseudovalue = pseudovalue,
+      value_log10 = log10(value + pseudovalue),
+      species = factor(species, levels = lcb_species_levels),
+      lipid_class_short = factor(lipid_class_short, levels = "LCB")
+    ) |>
+    arrange(experiment, readout, species, replicate, time_h, sample_group)
+
+  unit_species_readouts <- source_long |>
+    filter(
+      lipid_class_short %in% non_lcb_lipid_classes,
+      label_group %in% c("labelled", "unlabelled"),
+      !is_class_total,
+      !is_global_total
+    ) |>
+    transmute(
+      experiment,
+      tracer,
+      berlin_sample_id,
+      sample_name,
+      sample_group,
+      infection,
+      tracer_treatment,
+      is_tracer_treated,
+      time_h,
+      replicate,
+      unit,
+      lipid_class_short,
+      species,
+      species_base,
+      label_status,
+      label_group,
+      readout = ifelse(
+        label_group == "labelled",
+        "labelled_incorporation",
+        "unlabelled_abundance"
+      ),
+      readout_label = case_when(
+        label_group == "labelled" & experiment == "Pal-d3" ~ "labelled_species_d3_plus_d6",
+        label_group == "labelled" & experiment == "d7-dhSph" ~ "labelled_species_d7",
+        TRUE ~ "Unlabelled lipid species"
+      ),
+      value,
+      contributing_species = species
+    ) |>
+    mutate(
+      pseudovalue = pseudovalue,
+      value_log10 = log10(value + pseudovalue),
+      lipid_class_short = factor(lipid_class_short, levels = non_lcb_lipid_classes)
+    ) |>
+    arrange(
+      experiment,
+      readout,
+      lipid_class_short,
+      species_sort_index(species),
+      species,
+      replicate,
+      time_h,
+      sample_group
+    )
+
+  unit_analysis_readouts_unfactored <- bind_rows(
+    unit_lcb_readouts |>
+      mutate(
+        feature_type = "LCB molecule",
+        feature_name = format_analysis_feature(lipid_class_short, species)
+      ),
+    unit_species_readouts |>
+      mutate(
+        feature_type = "Lipid species",
+        feature_name = format_analysis_feature(lipid_class_short, species)
+      )
+  )
+
+  unit_analysis_feature_levels <- unit_analysis_readouts_unfactored |>
+    distinct(feature_type, lipid_class_short, species, feature_name) |>
+    mutate(
+      feature_type = factor(feature_type, levels = analysis_feature_type_levels),
+      lipid_class_short = factor(
+        lipid_class_short,
+        levels = c("LCB", non_lcb_lipid_classes)
+      ),
+      species_order = species_sort_index(species)
+    ) |>
+    arrange(feature_type, lipid_class_short, species_order, feature_name) |>
+    pull(feature_name) |>
+    unique()
+
+  unit_analysis_readouts <- unit_analysis_readouts_unfactored |>
+    mutate(
+      feature_type = factor(feature_type, levels = analysis_feature_type_levels),
+      feature_name = factor(feature_name, levels = unit_analysis_feature_levels),
+      readout = factor(
+        readout,
+        levels = c("labelled_incorporation", "unlabelled_abundance")
+      )
+    ) |>
+    arrange(experiment, readout, feature_name, replicate, time_h, sample_group)
+
+  unit_labelled_species <- source_long |>
+    filter(
+      label_group == "labelled",
+      !is_class_total,
+      !is_global_total
+    ) |>
+    mutate(
+      value_log10 = log10(value + pseudovalue),
+      lipid_class_short = factor(
+        lipid_class_short,
+        levels = c("LCB", "dhCer", "Cer", "dhSM", "SM", "HexCer", "LacCer")
+      )
+    ) |>
+    arrange(experiment, lipid_class_short, species, replicate, time_h, sample_group)
+
+  list(
+    class_readouts = unit_class_readouts,
+    lcb_readouts = unit_lcb_readouts,
+    species_readouts = unit_species_readouts,
+    analysis_readouts = unit_analysis_readouts,
+    labelled_species = unit_labelled_species
+  )
+}
+
+classify_ratio_direction <- function(x) {
+  case_when(
+    is.na(x) ~ NA_character_,
+    x > 1 ~ "infected_higher",
+    x < 1 ~ "infected_lower",
+    TRUE ~ "equal"
+  )
+}
+
+agreement_summary <- function(data, agreement_col, label) {
+  data |>
+    summarise(
+      comparison = label,
+      n_compared = sum(!is.na(.data[[agreement_col]])),
+      n_agree = sum(.data[[agreement_col]], na.rm = TRUE),
+      pct_agree = ifelse(n_compared > 0, 100 * n_agree / n_compared, NA_real_)
+    )
+}
+
+flux_normalized_long <- flux_long |>
+  filter(unit == "fmol_per_pmol_total_sphingolipids")
+
+normalized_tables <- make_analysis_readouts_from_long(flux_normalized_long)
+normalized_class_readouts <- normalized_tables$class_readouts
+normalized_lcb_readouts <- normalized_tables$lcb_readouts
+normalized_species_readouts <- normalized_tables$species_readouts
+normalized_analysis_readouts <- normalized_tables$analysis_readouts
+normalized_labelled_species <- normalized_tables$labelled_species
+
+if (nrow(normalized_analysis_readouts) > 0) {
+  normalized_auc_by_replicate <- normalized_analysis_readouts |>
+    filter(
+      readout == "labelled_incorporation",
+      is_tracer_treated
+    ) |>
+    group_by(
+      experiment,
+      tracer,
+      feature_type,
+      feature_name,
+      infection,
+      replicate
+    ) |>
+    summarise(
+      auc_value_h = trapezoid_auc(time_h, value),
+      auc_log10_h = trapezoid_auc(time_h, value_log10),
+      .groups = "drop"
+    )
+
+  normalized_auc_summary <- normalized_auc_by_replicate |>
+    group_by(experiment, tracer, feature_type, feature_name, infection) |>
+    summarise(
+      mean_auc = mean(auc_value_h, na.rm = TRUE),
+      sd_auc = sd(auc_value_h, na.rm = TRUE),
+      se_auc = mean_se(auc_value_h),
+      n = sum(!is.na(auc_value_h)),
+      .groups = "drop"
+    )
+
+  normalized_auc_ratio_summary <- normalized_auc_summary |>
+    select(experiment, tracer, feature_type, feature_name, infection, mean_auc, se_auc, n) |>
+    pivot_wider(
+      names_from = infection,
+      values_from = c(mean_auc, se_auc, n)
+    ) |>
+    mutate(
+      infected_over_uninfected_auc = mean_auc_Infected / mean_auc_Uninfected
+    ) |>
+    arrange(experiment, feature_name)
+
+  normalized_timepoint_pairwise_raw <- normalized_analysis_readouts |>
+    filter(
+      readout == "labelled_incorporation",
+      is_tracer_treated
+    ) |>
+    group_by(experiment, tracer, feature_type, feature_name, time_h) |>
+    group_modify(~ safe_infection_pairwise(.x)) |>
+    ungroup() |>
+    arrange(experiment, feature_name, time_h)
+
+  normalized_timepoint_tests <- normalized_timepoint_pairwise_raw |>
+    group_by(experiment) |>
+    mutate(
+      p_fdr = p.adjust(p_value, method = "BH"),
+      fdr_method = "BH within experiment across species and timepoints"
+    ) |>
+    ungroup() |>
+    arrange(experiment, feature_name, time_h)
+
+  normalized_timepoint_tests_panel_fdr <- normalized_timepoint_pairwise_raw |>
+    group_by(experiment, tracer, feature_type, feature_name) |>
+    mutate(
+      p_fdr = p.adjust(p_value, method = "BH"),
+      fdr_method = "BH within species panel across timepoints"
+    ) |>
+    ungroup() |>
+    arrange(experiment, feature_name, time_h)
+
+  normalized_infection_time_models_all_readouts <- normalized_analysis_readouts |>
+    filter(
+      readout %in% c("labelled_incorporation", "unlabelled_abundance"),
+      is_tracer_treated
+    ) |>
+    group_by(experiment, tracer, readout, readout_label, feature_type, feature_name) |>
+    group_modify(~ safe_infection_time_model(.x)) |>
+    ungroup() |>
+    group_by(experiment, readout) |>
+    mutate(
+      p_fdr_infection = p.adjust(p_infection, method = "BH"),
+      p_fdr_time = p.adjust(p_time, method = "BH"),
+      p_fdr_infection_time = p.adjust(p_infection_time, method = "BH")
+    ) |>
+    ungroup() |>
+    arrange(experiment, readout, feature_name)
+
+  normalized_curve_fdr_labels <- normalized_infection_time_models_all_readouts |>
+    transmute(
+      experiment,
+      tracer,
+      readout,
+      feature_type,
+      feature_name,
+      normalized_curve_fdr = p_fdr_infection_time,
+      normalized_curve_fdr_label = format_curve_fdr_label(p_fdr_infection_time)
+    )
+
+  curve_fdr_sensitivity_comparison <- curve_fdr_labels |>
+    rename(
+      absolute_curve_fdr = curve_fdr,
+      absolute_curve_fdr_label = curve_fdr_label
+    ) |>
+    full_join(
+      normalized_curve_fdr_labels,
+      by = c("experiment", "tracer", "readout", "feature_type", "feature_name")
+    ) |>
+    mutate(
+      absolute_significant = absolute_curve_fdr < 0.05,
+      normalized_significant = normalized_curve_fdr < 0.05,
+      same_significance_call = ifelse(
+        is.na(absolute_significant) | is.na(normalized_significant),
+        NA,
+        absolute_significant == normalized_significant
+      )
+    ) |>
+    arrange(experiment, readout, feature_name)
+
+  auc_sensitivity_comparison <- auc_ratio_summary |>
+    transmute(
+      experiment,
+      tracer,
+      feature_type,
+      feature_name,
+      absolute_auc_ratio = infected_over_uninfected_auc,
+      absolute_auc_direction = classify_ratio_direction(infected_over_uninfected_auc)
+    ) |>
+    full_join(
+      normalized_auc_ratio_summary |>
+        transmute(
+          experiment,
+          tracer,
+          feature_type,
+          feature_name,
+          normalized_auc_ratio = infected_over_uninfected_auc,
+          normalized_auc_direction = classify_ratio_direction(infected_over_uninfected_auc)
+        ),
+      by = c("experiment", "tracer", "feature_type", "feature_name")
+    ) |>
+    mutate(
+      same_auc_direction = ifelse(
+        is.na(absolute_auc_direction) | is.na(normalized_auc_direction),
+        NA,
+        absolute_auc_direction == normalized_auc_direction
+      )
+    ) |>
+    arrange(experiment, feature_name)
+
+  timepoint_sensitivity_comparison <- timepoint_tests |>
+    transmute(
+      experiment,
+      tracer,
+      feature_type,
+      feature_name,
+      time_h,
+      absolute_ratio = ratio_infected_over_uninfected,
+      absolute_fdr = p_fdr,
+      absolute_significant = p_fdr < 0.05
+    ) |>
+    full_join(
+      normalized_timepoint_tests |>
+        transmute(
+          experiment,
+          tracer,
+          feature_type,
+          feature_name,
+          time_h,
+          normalized_ratio = ratio_infected_over_uninfected,
+          normalized_fdr = p_fdr,
+          normalized_significant = p_fdr < 0.05
+        ),
+      by = c("experiment", "tracer", "feature_type", "feature_name", "time_h")
+    ) |>
+    mutate(
+      same_significance_call = ifelse(
+        is.na(absolute_significant) | is.na(normalized_significant),
+        NA,
+        absolute_significant == normalized_significant
+      )
+    ) |>
+    arrange(experiment, feature_name, time_h)
+
+  timepoint_sensitivity_comparison_panel_fdr <- timepoint_tests_panel_fdr |>
+    transmute(
+      experiment,
+      tracer,
+      feature_type,
+      feature_name,
+      time_h,
+      absolute_ratio = ratio_infected_over_uninfected,
+      absolute_fdr = p_fdr,
+      absolute_significant = p_fdr < 0.05
+    ) |>
+    full_join(
+      normalized_timepoint_tests_panel_fdr |>
+        transmute(
+          experiment,
+          tracer,
+          feature_type,
+          feature_name,
+          time_h,
+          normalized_ratio = ratio_infected_over_uninfected,
+          normalized_fdr = p_fdr,
+          normalized_significant = p_fdr < 0.05
+        ),
+      by = c("experiment", "tracer", "feature_type", "feature_name", "time_h")
+    ) |>
+    mutate(
+      same_significance_call = ifelse(
+        is.na(absolute_significant) | is.na(normalized_significant),
+        NA,
+        absolute_significant == normalized_significant
+      )
+    ) |>
+    arrange(experiment, feature_name, time_h)
+
+  normalized_sensitivity_summary <- bind_rows(
+    agreement_summary(
+      curve_fdr_sensitivity_comparison,
+      "same_significance_call",
+      "Curve FDR significance agreement, labelled and unlabelled readouts"
+    ),
+    agreement_summary(
+      curve_fdr_sensitivity_comparison |>
+        filter(readout == "labelled_incorporation"),
+      "same_significance_call",
+      "Curve FDR significance agreement, labelled incorporation only"
+    ),
+    agreement_summary(
+      timepoint_sensitivity_comparison,
+      "same_significance_call",
+      "Timepoint experiment-level FDR significance agreement, labelled incorporation"
+    ),
+    agreement_summary(
+      timepoint_sensitivity_comparison_panel_fdr,
+      "same_significance_call",
+      "Timepoint panel-level FDR significance agreement, labelled incorporation"
+    ),
+    agreement_summary(
+      auc_sensitivity_comparison,
+      "same_auc_direction",
+      "AUC infected/uninfected direction agreement, labelled incorporation"
+    )
+  )
+} else {
+  normalized_auc_by_replicate <- tibble()
+  normalized_auc_summary <- tibble()
+  normalized_auc_ratio_summary <- tibble()
+  normalized_timepoint_pairwise_raw <- tibble()
+  normalized_timepoint_tests <- tibble()
+  normalized_timepoint_tests_panel_fdr <- tibble()
+  normalized_infection_time_models_all_readouts <- tibble()
+  normalized_curve_fdr_labels <- tibble()
+  curve_fdr_sensitivity_comparison <- tibble()
+  auc_sensitivity_comparison <- tibble()
+  timepoint_sensitivity_comparison <- tibble()
+  timepoint_sensitivity_comparison_panel_fdr <- tibble()
+  normalized_sensitivity_summary <- tibble(
+    comparison = "Normalized block was not imported",
+    n_compared = 0,
+    n_agree = 0,
+    pct_agree = NA_real_
+  )
+}
+
+write_csv_if_requested(flux_normalized_long, "normalized_sensitivity_flux_long.csv")
+write_csv_if_requested(
+  normalized_class_readouts,
+  "normalized_sensitivity_class_readouts.csv"
+)
+write_csv_if_requested(
+  normalized_lcb_readouts,
+  "normalized_sensitivity_lcb_readouts.csv"
+)
+write_csv_if_requested(
+  normalized_species_readouts,
+  "normalized_sensitivity_species_readouts.csv"
+)
+write_csv_if_requested(
+  normalized_analysis_readouts,
+  "normalized_sensitivity_analysis_readouts.csv"
+)
+write_csv_if_requested(
+  normalized_labelled_species,
+  "normalized_sensitivity_labelled_species.csv"
+)
+write_csv_if_requested(
+  normalized_auc_by_replicate,
+  "normalized_sensitivity_auc_by_replicate.csv"
+)
+write_csv_if_requested(
+  normalized_auc_summary,
+  "normalized_sensitivity_auc_summary.csv"
+)
+write_csv_if_requested(
+  normalized_auc_ratio_summary,
+  "normalized_sensitivity_auc_ratio_summary.csv"
+)
+write_csv_if_requested(
+  normalized_timepoint_pairwise_raw,
+  "normalized_sensitivity_timepoint_pairwise_emmeans_raw_labelled_incorporation.csv"
+)
+write_csv_if_requested(
+  normalized_timepoint_tests,
+  "normalized_sensitivity_timepoint_pairwise_emmeans_labelled_incorporation.csv"
+)
+write_csv_if_requested(
+  normalized_timepoint_tests,
+  "normalized_sensitivity_timepoint_pairwise_emmeans_experiment_fdr_labelled_incorporation.csv"
+)
+write_csv_if_requested(
+  normalized_timepoint_tests_panel_fdr,
+  "normalized_sensitivity_timepoint_pairwise_emmeans_panel_fdr_labelled_incorporation.csv"
+)
+write_csv_if_requested(
+  normalized_infection_time_models_all_readouts,
+  "normalized_sensitivity_infection_time_models_all_readouts.csv"
+)
+write_csv_if_requested(
+  normalized_curve_fdr_labels,
+  "normalized_sensitivity_curve_fdr_labels.csv"
+)
+write_csv_if_requested(
+  curve_fdr_sensitivity_comparison,
+  "normalized_sensitivity_curve_fdr_comparison.csv"
+)
+write_csv_if_requested(
+  auc_sensitivity_comparison,
+  "normalized_sensitivity_auc_comparison.csv"
+)
+write_csv_if_requested(
+  timepoint_sensitivity_comparison,
+  "normalized_sensitivity_timepoint_comparison.csv"
+)
+write_csv_if_requested(
+  timepoint_sensitivity_comparison_panel_fdr,
+  "normalized_sensitivity_timepoint_comparison_panel_fdr.csv"
+)
+write_csv_if_requested(
+  normalized_sensitivity_summary,
+  "normalized_sensitivity_summary.csv"
+)
+
+if (write_outputs) {
+  summary_file <- file.path(output_dir, "normalized_sensitivity_summary.md")
+  writeLines(
+    c(
+      "# Normalized Block Sensitivity Analysis",
+      "",
+      "This sensitivity analysis repeats the main isotope-tracer statistics on the normalized `fmol / pmol total sphingolipids` block.",
+      "The primary analysis remains the absolute `pmol / sample` block.",
+      "",
+      "Both analyses use the same model structure:",
+      "",
+      "```text",
+      "log10(value + 0.01) ~ infection * time_f",
+      "```",
+      "",
+      "The main comparison is whether the BH-adjusted infection-by-time significance call agrees between absolute and normalized measurements.",
+      "",
+      paste(capture.output(print(normalized_sensitivity_summary)), collapse = "\n")
+    ),
+    con = summary_file
+  )
+}
+
+normalized_sensitivity_summary
+```
+
+## 11. Distribution Diagnostics
+
+These diagnostics check whether the labelled incorporation features are strongly
+right-skewed, whether low/zero values are common, and whether the current
+log10-transformed infection-by-time models have reasonable residual behavior.
+LCB entries are treated as molecule-level features, while non-LCB lipids are
+treated as species-level features.
+
+```{r distribution-diagnostic-data}
+diagnostic_labelled <- flux_analysis_readouts |>
+  filter(
+    readout == "labelled_incorporation",
+    is_tracer_treated
+  ) |>
+  mutate(
+    value_log10 = log10(value + pseudovalue),
+    near_zero = value <= pseudovalue,
+    experiment = factor(experiment, levels = c("Pal-d3", "d7-dhSph"))
+  )
+
+zero_nearzero_summary <- diagnostic_labelled |>
+  group_by(experiment, feature_type, feature_name) |>
+  summarise(
+    n = n(),
+    zero_n = sum(value == 0, na.rm = TRUE),
+    near_zero_n = sum(near_zero, na.rm = TRUE),
+    zero_pct = 100 * zero_n / n,
+    near_zero_pct = 100 * near_zero_n / n,
+    .groups = "drop"
+  )
+
+mean_sd_diagnostics <- diagnostic_labelled |>
+  group_by(experiment, feature_type, feature_name, infection, time_h) |>
+  summarise(
+    mean_raw = mean(value, na.rm = TRUE),
+    sd_raw = sd(value, na.rm = TRUE),
+    mean_log10 = mean(value_log10, na.rm = TRUE),
+    sd_log10 = sd(value_log10, na.rm = TRUE),
+    n = sum(!is.na(value)),
+    .groups = "drop"
+  ) |>
+  pivot_longer(
+    cols = c(mean_raw, sd_raw, mean_log10, sd_log10),
+    names_to = c(".value", "scale"),
+    names_pattern = "(mean|sd)_(raw|log10)"
+  ) |>
+  mutate(
+    scale = recode(scale, raw = "Raw pmol / sample", log10 = "log10(value + 0.01)")
+  )
+
+model_residual_diagnostics <- diagnostic_labelled |>
+  group_by(experiment, feature_type, feature_name) |>
+  group_modify(~ {
+    model_data <- .x |>
+      filter(!is.na(value_log10), !is.na(infection), !is.na(time_h)) |>
+      mutate(
+        infection = factor(infection, levels = c("Uninfected", "Infected")),
+        time_f = factor(time_h)
+      )
+
+    fit <- lm(value_log10 ~ infection * time_f, data = model_data)
+
+    tibble(
+      infection = model_data$infection,
+      time_h = model_data$time_h,
+      fitted = fitted(fit),
+      residual = resid(fit),
+      std_residual = rstandard(fit)
+    )
+  }) |>
+  ungroup()
+
+write_csv_if_requested(zero_nearzero_summary, "diagnostics_zero_nearzero_summary.csv")
+write_csv_if_requested(mean_sd_diagnostics, "diagnostics_mean_sd_summary.csv")
+write_csv_if_requested(model_residual_diagnostics, "diagnostics_model_residuals.csv")
+
+zero_nearzero_summary
+```
+
+### 11.1 Raw And Log10 Distributions
+
+```{r plot-diagnostics-raw-log-distribution, fig.width=10, fig.height=5.5}
+diagnostic_distribution_long <- diagnostic_labelled |>
+  select(experiment, feature_type, feature_name, infection, value, value_log10) |>
+  pivot_longer(
+    cols = c(value, value_log10),
+    names_to = "scale",
+    values_to = "plot_value"
+  ) |>
+  mutate(
+    scale = recode(
+      scale,
+      value = "Raw pmol / sample",
+      value_log10 = "log10(value + 0.01)"
+    )
+  )
+
+p_diagnostics_raw_log_distribution <- diagnostic_distribution_long |>
+  ggplot(aes(x = plot_value, fill = infection, color = infection)) +
+  geom_density(alpha = 0.18, linewidth = 0.5, na.rm = TRUE) +
+  facet_grid(scale ~ experiment, scales = "free") +
+  scale_color_manual(values = c("Uninfected" = "#0072B2", "Infected" = "#D55E00")) +
+  scale_fill_manual(values = c("Uninfected" = "#0072B2", "Infected" = "#D55E00")) +
+  labs(
+    x = NULL,
+    y = "Density",
+    color = NULL,
+    fill = NULL
+  ) +
+  theme_classic(base_size = 10) +
+  theme(
+    strip.background = element_blank(),
+    legend.position = "top"
+  )
+
+p_diagnostics_raw_log_distribution
+save_plot_if_requested(
+  p_diagnostics_raw_log_distribution,
+  "diagnostics_raw_vs_log10_density.png",
+  width = 10,
+  height = 5.5
+)
+if (write_outputs) {
+  ggsave(
+    filename = file.path(output_dir, "diagnostics_raw_vs_log10_density.pdf"),
+    plot = p_diagnostics_raw_log_distribution,
+    width = 10,
+    height = 5.5,
+    units = "in",
+    bg = "white"
+  )
+}
+```
+
+### 11.2 Zero And Near-Zero Burden
+
+```{r plot-diagnostics-zero-nearzero, fig.width=8.5, fig.height=4.8}
+p_diagnostics_zero_nearzero <- zero_nearzero_summary |>
+  ggplot(aes(x = feature_name, y = near_zero_pct, fill = experiment)) +
+  geom_col(position = position_dodge(width = 0.7), width = 0.6, color = "black") +
+  labs(
+    x = NULL,
+    y = "Values <= pseudovalue (%)",
+    fill = NULL
+  ) +
+  scale_fill_manual(values = c("Pal-d3" = "#56B4E9", "d7-dhSph" = "#E69F00")) +
+  theme_classic(base_size = 10) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "top"
+  )
+
+p_diagnostics_zero_nearzero
+save_plot_if_requested(
+  p_diagnostics_zero_nearzero,
+  "diagnostics_zero_nearzero_burden.png",
+  width = 8.5,
+  height = 4.8
+)
+if (write_outputs) {
+  ggsave(
+    filename = file.path(output_dir, "diagnostics_zero_nearzero_burden.pdf"),
+    plot = p_diagnostics_zero_nearzero,
+    width = 8.5,
+    height = 4.8,
+    units = "in",
+    bg = "white"
+  )
+}
+```
+
+### 11.3 Mean-SD Relationship
+
+```{r plot-diagnostics-mean-sd, fig.width=10, fig.height=5}
+p_diagnostics_mean_sd <- mean_sd_diagnostics |>
+  ggplot(aes(x = mean, y = sd, color = infection)) +
+  geom_point(alpha = 0.75, size = 1.8) +
+  facet_grid(scale ~ experiment, scales = "free") +
+  scale_color_manual(values = c("Uninfected" = "#0072B2", "Infected" = "#D55E00")) +
+  labs(
+    x = "Mean",
+    y = "SD",
+    color = NULL
+  ) +
+  theme_classic(base_size = 10) +
+  theme(
+    strip.background = element_blank(),
+    legend.position = "top"
+  )
+
+p_diagnostics_mean_sd
+save_plot_if_requested(
+  p_diagnostics_mean_sd,
+  "diagnostics_mean_sd_raw_vs_log10.png",
+  width = 10,
+  height = 5
+)
+if (write_outputs) {
+  ggsave(
+    filename = file.path(output_dir, "diagnostics_mean_sd_raw_vs_log10.pdf"),
+    plot = p_diagnostics_mean_sd,
+    width = 10,
+    height = 5,
+    units = "in",
+    bg = "white"
+  )
+}
+```
+
+### 11.4 Residuals Versus Fitted Values
+
+```{r plot-diagnostics-residuals-fitted, fig.width=12, fig.height=7}
+p_diagnostics_residuals_fitted <- model_residual_diagnostics |>
+  ggplot(aes(x = fitted, y = residual, color = infection)) +
+  geom_hline(yintercept = 0, linewidth = 0.35, color = "grey50") +
+  geom_point(alpha = 0.75, size = 1.7) +
+  facet_wrap(vars(experiment, feature_name), scales = "free", ncol = 6) +
+  scale_color_manual(values = c("Uninfected" = "#0072B2", "Infected" = "#D55E00")) +
+  labs(
+    x = "Fitted log10(value + 0.01)",
+    y = "Residual",
+    color = NULL
+  ) +
+  theme_classic(base_size = 10) +
+  theme(
+    strip.background = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "top"
+  )
+
+p_diagnostics_residuals_fitted
+save_plot_if_requested(
+  p_diagnostics_residuals_fitted,
+  "diagnostics_residuals_vs_fitted.png",
+  width = 12,
+  height = 7
+)
+if (write_outputs) {
+  ggsave(
+    filename = file.path(output_dir, "diagnostics_residuals_vs_fitted.pdf"),
+    plot = p_diagnostics_residuals_fitted,
+    width = 12,
+    height = 7,
+    units = "in",
+    bg = "white"
+  )
+}
+```
+
+### 11.5 Q-Q Plot Of Model Residuals
+
+```{r plot-diagnostics-qq, fig.width=12, fig.height=7}
+p_diagnostics_qq <- model_residual_diagnostics |>
+  ggplot(aes(sample = residual)) +
+  stat_qq(alpha = 0.75, size = 1.7, color = "grey30") +
+  stat_qq_line(linewidth = 0.35, color = "grey50") +
+  facet_wrap(vars(experiment, feature_name), scales = "free", ncol = 6) +
+  labs(
+    x = "Theoretical normal quantile",
+    y = "Sample residual quantile"
+  ) +
+  theme_classic(base_size = 10) +
+  theme(
+    strip.background = element_blank(),
+    legend.position = "none"
+  )
+
+p_diagnostics_qq
+save_plot_if_requested(
+  p_diagnostics_qq,
+  "diagnostics_residual_qq.png",
+  width = 12,
+  height = 7
+)
+if (write_outputs) {
+  ggsave(
+    filename = file.path(output_dir, "diagnostics_residual_qq.pdf"),
+    plot = p_diagnostics_qq,
+    width = 12,
+    height = 7,
+    units = "in",
+    bg = "white"
+  )
+}
+```
+
+## 12. Starter Plots
+
+### 12.1 Labelled Incorporation Time Course
+
+```{r plot-labelled-timecourse, fig.width=14, fig.height=18}
+labelled_curve_fdr_labels <- flux_analysis_summary |>
+  filter(
+    readout == "labelled_incorporation",
+    is_tracer_treated
+  ) |>
+  curve_label_positions(c("experiment", "feature_name")) |>
+  left_join(
+    curve_fdr_labels |>
+      filter(readout == "labelled_incorporation") |>
+      select(experiment, feature_name, curve_fdr_label),
+    by = c("experiment", "feature_name")
+  )
+
+p_labelled_timecourse <- flux_analysis_summary |>
+  filter(
+    readout == "labelled_incorporation",
+    is_tracer_treated
+  ) |>
+  add_timepoint_plot_position() |>
+  ggplot(aes(x = time_plot, y = mean_value, color = infection, group = infection)) +
+  geom_line(linewidth = 0.5) +
+  geom_point(size = 1.8) +
+  geom_errorbar(
+    aes(ymin = mean_value - se_value, ymax = mean_value + se_value),
+    width = 0.15,
+    linewidth = 0.4
+  ) +
+  geom_label(
+    data = labelled_curve_fdr_labels,
+    aes(x = label_x, y = label_y, label = curve_fdr_label),
+    inherit.aes = FALSE,
+    hjust = 0,
+    vjust = 1,
+    size = 2.4,
+    linewidth = 0.15,
+    label.r = grid::unit(0.06, "lines"),
+    fill = "white",
+    alpha = 0.85,
+    color = "grey20",
+    na.rm = TRUE
+  ) +
+  facet_wrap(vars(experiment, feature_name), scales = "free_y", ncol = 6) +
+  scale_timepoint_x() +
+  scale_color_manual(values = c("Uninfected" = "#0072B2", "Infected" = "#D55E00")) +
+  labs(
+    x = "Time after tracer addition (h)",
+    y = "Labelled incorporation (pmol / sample)",
+    color = NULL
+  ) +
+  theme_classic(base_size = 10) +
+  theme(
+    strip.background = element_blank(),
+    axis.text.x = element_text(angle = 0, hjust = 0.5),
+    legend.position = "top"
+  )
+
+p_labelled_timecourse
+save_plot_if_requested(
+  p_labelled_timecourse,
+  "labelled_incorporation_timecourse.png",
+  width = 14,
+  height = 18
+)
+```
+
+### 12.2 AUC Ratio Summary
+
+```{r plot-auc-ratio, fig.width=14, fig.height=6}
+p_auc_ratio <- auc_ratio_summary |>
+  filter(is.finite(infected_over_uninfected_auc)) |>
+  ggplot(aes(x = feature_name, y = infected_over_uninfected_auc, fill = feature_type)) +
+  geom_hline(yintercept = 1, linewidth = 0.4, color = "grey45") +
+  geom_col(color = "black", width = 0.65) +
+  facet_wrap(~ experiment, nrow = 1, scales = "free_x") +
+  scale_fill_manual(
+    values = c("LCB molecule" = "#E69F00", "Lipid species" = "#56B4E9")
+  ) +
+  labs(
+    x = NULL,
+    y = "AUC ratio: infected / uninfected",
+    fill = NULL
+  ) +
+  theme_classic(base_size = 10) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.background = element_blank()
+  )
+
+p_auc_ratio
+save_plot_if_requested(
+  p_auc_ratio,
+  "auc_ratio_infected_over_uninfected.png",
+  width = 14,
+  height = 6
+)
+```
+
+### 12.3 Labelled LCB Molecules
+
+This plot is deliberately molecule-level. LCBs are not summed into a broad
+class because `dhSph`, `Sph`, and `S1P` represent distinct sphingoid-base
+molecules rather than acyl-chain variants of one lipid class.
+
+```{r plot-lcb-labelled-species, fig.width=12, fig.height=6}
+lcb_labelled_curve_fdr_labels <- flux_lcb_summary |>
+  filter(
+    readout == "labelled_incorporation",
+    is_tracer_treated
+  ) |>
+  mutate(species = as.character(species)) |>
+  curve_label_positions(c("experiment", "species")) |>
+  left_join(
+    curve_fdr_labels |>
+      filter(
+        readout == "labelled_incorporation",
+        feature_type == "LCB molecule"
+      ) |>
+      transmute(
+        experiment,
+        species = as.character(feature_name),
+        curve_fdr_label
+      ),
+    by = c("experiment", "species")
+  ) |>
+  mutate(species = factor(species, levels = lcb_species_levels))
+
+p_lcb_labelled_species <- flux_lcb_summary |>
+  filter(
+    readout == "labelled_incorporation",
+    is_tracer_treated
+  ) |>
+  mutate(species = droplevels(species)) |>
+  add_timepoint_plot_position() |>
+  ggplot(aes(x = time_plot, y = mean_value, color = infection, group = infection)) +
+  geom_line(linewidth = 0.5) +
+  geom_point(size = 1.8) +
+  geom_errorbar(
+    aes(ymin = mean_value - se_value, ymax = mean_value + se_value),
+    width = 0.15,
+    linewidth = 0.4
+  ) +
+  geom_label(
+    data = lcb_labelled_curve_fdr_labels,
+    aes(x = label_x, y = label_y, label = curve_fdr_label),
+    inherit.aes = FALSE,
+    hjust = 0,
+    vjust = 1,
+    size = 2.4,
+    linewidth = 0.15,
+    label.r = grid::unit(0.06, "lines"),
+    fill = "white",
+    alpha = 0.85,
+    color = "grey20",
+    na.rm = TRUE
+  ) +
+  facet_wrap(vars(experiment, species), scales = "free_y", ncol = 5) +
+  scale_timepoint_x() +
+  scale_color_manual(values = c("Uninfected" = "#0072B2", "Infected" = "#D55E00")) +
+  labs(
+    x = "Time after tracer addition (h)",
+    y = "Labelled LCB molecule (pmol / sample)",
+    color = NULL
+  ) +
+  theme_classic(base_size = 10) +
+  theme(
+    strip.background = element_blank(),
+    axis.text.x = element_text(angle = 0, hjust = 0.5),
+    legend.position = "top"
+  )
+
+p_lcb_labelled_species
+save_plot_if_requested(
+  p_lcb_labelled_species,
+  "lcb_labelled_species_timecourse.png",
+  width = 12,
+  height = 6
+)
+```
+
+### 12.4 Unlabelled LCB Molecules
+
+```{r plot-lcb-unlabelled-species, fig.width=12, fig.height=6}
+lcb_unlabelled_curve_fdr_labels <- flux_lcb_summary |>
+  filter(
+    readout == "unlabelled_abundance",
+    is_tracer_treated
+  ) |>
+  mutate(species = as.character(species)) |>
+  curve_label_positions(c("experiment", "species")) |>
+  left_join(
+    curve_fdr_labels |>
+      filter(
+        readout == "unlabelled_abundance",
+        feature_type == "LCB molecule"
+      ) |>
+      transmute(
+        experiment,
+        species = as.character(feature_name),
+        curve_fdr_label
+      ),
+    by = c("experiment", "species")
+  ) |>
+  mutate(species = factor(species, levels = lcb_species_levels))
+
+p_lcb_unlabelled_species <- flux_lcb_summary |>
+  filter(
+    readout == "unlabelled_abundance",
+    is_tracer_treated
+  ) |>
+  mutate(species = droplevels(species)) |>
+  add_timepoint_plot_position() |>
+  ggplot(aes(x = time_plot, y = mean_value, color = infection, group = infection)) +
+  geom_line(linewidth = 0.5) +
+  geom_point(size = 1.8) +
+  geom_errorbar(
+    aes(ymin = mean_value - se_value, ymax = mean_value + se_value),
+    width = 0.15,
+    linewidth = 0.4
+  ) +
+  geom_label(
+    data = lcb_unlabelled_curve_fdr_labels,
+    aes(x = label_x, y = label_y, label = curve_fdr_label),
+    inherit.aes = FALSE,
+    hjust = 0,
+    vjust = 1,
+    size = 2.4,
+    linewidth = 0.15,
+    label.r = grid::unit(0.06, "lines"),
+    fill = "white",
+    alpha = 0.85,
+    color = "grey20",
+    na.rm = TRUE
+  ) +
+  facet_wrap(vars(experiment, species), scales = "free_y", ncol = 5) +
+  scale_timepoint_x() +
+  scale_color_manual(values = c("Uninfected" = "#0072B2", "Infected" = "#D55E00")) +
+  labs(
+    x = "Time after tracer addition (h)",
+    y = "Unlabelled LCB molecule (pmol / sample)",
+    color = NULL
+  ) +
+  theme_classic(base_size = 10) +
+  theme(
+    strip.background = element_blank(),
+    axis.text.x = element_text(angle = 0, hjust = 0.5),
+    legend.position = "top"
+  )
+
+p_lcb_unlabelled_species
+save_plot_if_requested(
+  p_lcb_unlabelled_species,
+  "lcb_unlabelled_species_timecourse.png",
+  width = 12,
+  height = 6
+)
+```
+
+### 12.5 Unlabelled Abundance Time Course
+
+```{r plot-unlabelled-timecourse, fig.width=14, fig.height=24}
+unlabelled_curve_fdr_labels <- flux_analysis_summary |>
+  filter(
+    readout == "unlabelled_abundance",
+    is_tracer_treated
+  ) |>
+  curve_label_positions(c("experiment", "feature_name")) |>
+  left_join(
+    curve_fdr_labels |>
+      filter(readout == "unlabelled_abundance") |>
+      select(experiment, feature_name, curve_fdr_label),
+    by = c("experiment", "feature_name")
+  )
+
+p_unlabelled_timecourse <- flux_analysis_summary |>
+  filter(
+    readout == "unlabelled_abundance",
+    is_tracer_treated
+  ) |>
+  add_timepoint_plot_position() |>
+  ggplot(aes(x = time_plot, y = mean_value, color = infection, group = infection)) +
+  geom_line(linewidth = 0.5) +
+  geom_point(size = 1.8) +
+  geom_errorbar(
+    aes(ymin = mean_value - se_value, ymax = mean_value + se_value),
+    width = 0.15,
+    linewidth = 0.4
+  ) +
+  geom_label(
+    data = unlabelled_curve_fdr_labels,
+    aes(x = label_x, y = label_y, label = curve_fdr_label),
+    inherit.aes = FALSE,
+    hjust = 0,
+    vjust = 1,
+    size = 2.4,
+    linewidth = 0.15,
+    label.r = grid::unit(0.06, "lines"),
+    fill = "white",
+    alpha = 0.85,
+    color = "grey20",
+    na.rm = TRUE
+  ) +
+  facet_wrap(vars(experiment, feature_name), scales = "free_y", ncol = 6) +
+  scale_timepoint_x() +
+  scale_color_manual(values = c("Uninfected" = "#0072B2", "Infected" = "#D55E00")) +
+  labs(
+    x = "Time after tracer addition (h)",
+    y = "Unlabelled abundance (pmol / sample)",
+    color = NULL
+  ) +
+  theme_classic(base_size = 10) +
+  theme(
+    strip.background = element_blank(),
+    axis.text.x = element_text(angle = 0, hjust = 0.5),
+    legend.position = "top"
+  )
+
+p_unlabelled_timecourse
+save_plot_if_requested(
+  p_unlabelled_timecourse,
+  "unlabelled_abundance_timecourse.png",
+  width = 14,
+  height = 24
+)
+```
+
+### 12.6 Export Individual Panels
+
+Set `export_individual_panels: true` in the YAML parameters, or run with
+`EXPORT_INDIVIDUAL_PANELS=true`, to save each faceted lipid panel as a separate
+file. The default format is PNG. To write more than one format, set
+`individual_panel_formats: "png,pdf"` or run with
+`INDIVIDUAL_PANEL_FORMATS=png,pdf`.
+
+```{r export-individual-panels}
+plot_single_timecourse_panel <- function(
+  panel_data,
+  title,
+  x_label,
+  y_label,
+  curve_fdr_label = NULL
+) {
+  panel_data <- add_timepoint_plot_position(panel_data)
+
+  p <- ggplot(
+    panel_data,
+    aes(x = time_plot, y = mean_value, color = infection, group = infection)
+  ) +
+    geom_line(linewidth = 0.5) +
+    geom_point(size = 1.8) +
+    geom_errorbar(
+      aes(
+        ymin = pmax(mean_value - se_value, 0),
+        ymax = mean_value + se_value
+      ),
+      width = 0.15,
+      linewidth = 0.4
+    ) +
+    scale_timepoint_x() +
+    scale_color_manual(
+      values = c("Uninfected" = "#0072B2", "Infected" = "#D55E00")
+    ) +
+    labs(
+      title = title,
+      x = x_label,
+      y = y_label,
+      color = NULL
+    ) +
+    theme_classic(base_size = 10) +
+    theme(
+      plot.title = element_text(size = 11, face = "bold"),
+      axis.text.x = element_text(angle = 0, hjust = 0.5),
+      legend.position = "top"
+    )
+
+  if (!is.null(curve_fdr_label) && length(curve_fdr_label) > 0) {
+    y_min <- min(pmax(panel_data$mean_value - panel_data$se_value, 0), na.rm = TRUE)
+    y_max <- max(panel_data$mean_value + panel_data$se_value, na.rm = TRUE)
+    y_range <- ifelse(
+      is.finite(y_max - y_min) && y_max > y_min,
+      y_max - y_min,
+      pmax(abs(y_max), 1)
+    )
+    label_y <- y_max + 0.08 * y_range
+    label_time <- min(panel_data$time_h, na.rm = TRUE)
+    label_x <- timepoint_plot_breaks[match(label_time, timepoint_levels)]
+
+    if (is.finite(label_y) && is.finite(label_x)) {
+      p <- p +
+        annotate(
+          "label",
+          x = label_x,
+          y = label_y,
+          label = curve_fdr_label[1],
+          hjust = 0,
+          vjust = 1,
+          size = 2.7,
+          linewidth = 0.15,
+          label.r = grid::unit(0.06, "lines"),
+          fill = "white",
+          alpha = 0.85,
+          color = "grey20"
+        )
+    }
+  }
+
+  p
+}
+
+individual_panel_exports <- tibble(
+  panel_type = character(),
+  experiment = character(),
+  panel = character(),
+  format = character(),
+  file = character()
+)
+
+record_panel_exports <- function(panel_type, experiment, panel, path_stem) {
+  bind_rows(
+    individual_panel_exports,
+    tibble(
+      panel_type = panel_type,
+      experiment = as.character(experiment),
+      panel = as.character(panel),
+      format = individual_panel_formats,
+      file = file.path(output_dir, paste0(path_stem, ".", individual_panel_formats))
+    )
+  )
+}
+
+labelled_panel_index <- flux_analysis_summary |>
+  filter(readout == "labelled_incorporation", is_tracer_treated) |>
+  distinct(experiment, feature_type, feature_name) |>
+  arrange(experiment, feature_name)
+
+for (i in seq_len(nrow(labelled_panel_index))) {
+  panel_experiment <- labelled_panel_index$experiment[i]
+  panel_feature_type <- labelled_panel_index$feature_type[i]
+  panel_feature <- labelled_panel_index$feature_name[i]
+
+  panel_data <- flux_analysis_summary |>
+    filter(
+      readout == "labelled_incorporation",
+      is_tracer_treated,
+      experiment == panel_experiment,
+      feature_name == panel_feature
+    )
+
+  panel_curve_fdr_label <- curve_fdr_labels |>
+    filter(
+      readout == "labelled_incorporation",
+      experiment == panel_experiment,
+      feature_name == panel_feature
+    ) |>
+    pull(curve_fdr_label)
+
+  path_stem <- file.path(
+    "individual_panels",
+    "labelled_incorporation",
+    paste(
+      safe_file_part(panel_experiment),
+      safe_file_part(panel_feature),
+      sep = "_"
+    )
+  )
+
+  p_panel <- plot_single_timecourse_panel(
+    panel_data = panel_data,
+    title = paste(panel_experiment, panel_feature, "labelled incorporation"),
+    x_label = "Time after tracer addition (h)",
+    y_label = "Labelled incorporation (pmol / sample)",
+    curve_fdr_label = panel_curve_fdr_label
+  )
+
+  save_individual_panel_if_requested(p_panel, path_stem, width = 4.2, height = 3.4)
+  individual_panel_exports <- record_panel_exports(
+    "labelled_incorporation",
+    panel_experiment,
+    paste(panel_feature_type, panel_feature, sep = ": "),
+    path_stem
+  )
+}
+
+unlabelled_panel_index <- flux_analysis_summary |>
+  filter(readout == "unlabelled_abundance", is_tracer_treated) |>
+  distinct(experiment, feature_type, feature_name) |>
+  arrange(experiment, feature_name)
+
+for (i in seq_len(nrow(unlabelled_panel_index))) {
+  panel_experiment <- unlabelled_panel_index$experiment[i]
+  panel_feature_type <- unlabelled_panel_index$feature_type[i]
+  panel_feature <- unlabelled_panel_index$feature_name[i]
+
+  panel_data <- flux_analysis_summary |>
+    filter(
+      readout == "unlabelled_abundance",
+      is_tracer_treated,
+      experiment == panel_experiment,
+      feature_name == panel_feature
+    )
+
+  panel_curve_fdr_label <- curve_fdr_labels |>
+    filter(
+      readout == "unlabelled_abundance",
+      experiment == panel_experiment,
+      feature_name == panel_feature
+    ) |>
+    pull(curve_fdr_label)
+
+  path_stem <- file.path(
+    "individual_panels",
+    "unlabelled_abundance",
+    paste(
+      safe_file_part(panel_experiment),
+      safe_file_part(panel_feature),
+      sep = "_"
+    )
+  )
+
+  p_panel <- plot_single_timecourse_panel(
+    panel_data = panel_data,
+    title = paste(panel_experiment, panel_feature, "unlabelled abundance"),
+    x_label = "Time after tracer addition (h)",
+    y_label = "Unlabelled abundance (pmol / sample)",
+    curve_fdr_label = panel_curve_fdr_label
+  )
+
+  save_individual_panel_if_requested(p_panel, path_stem, width = 4.2, height = 3.4)
+  individual_panel_exports <- record_panel_exports(
+    "unlabelled_abundance",
+    panel_experiment,
+    paste(panel_feature_type, panel_feature, sep = ": "),
+    path_stem
+  )
+}
+
+if (write_outputs && export_individual_panels) {
+  write.csv(
+    individual_panel_exports,
+    file.path(output_dir, "individual_panel_exports.csv"),
+    row.names = FALSE
+  )
+}
+
+individual_panel_exports
+```
+
+### 12.7 Export Prism-Style Labelled Incorporation Tables
+
+This export creates one Prism-style workbook for each current labelled
+incorporation panel. The tables use absolute `pmol / sample` values. Column A
+contains timepoints, columns B-D contain uninfected replicates (`-Sne`), and
+columns E-G contain infected replicates (`+Sne`).
+
+```{r export-prism-labelled-tables}
+prism_labelled_dir <- file.path(
+  output_dir,
+  "prism_labelled_incorporation_tables"
+)
+
+write_prism_labelled_table <- function(panel_data, xlsx_path) {
+  timepoints <- sort(unique(panel_data$time_h))
+  replicate_levels <- sort(unique(as.character(panel_data$replicate)))
+
+  if (length(replicate_levels) < 3) {
+    replicate_levels <- union(c("1", "2", "3"), replicate_levels)
+  }
+
+  replicate_levels <- replicate_levels[seq_len(min(3, length(replicate_levels)))]
+
+  make_group_matrix <- function(infection_label) {
+    panel_data |>
+      filter(infection == infection_label) |>
+      mutate(
+        replicate = factor(as.character(replicate), levels = replicate_levels),
+        time_h = factor(time_h, levels = timepoints)
+      ) |>
+      select(time_h, replicate, value) |>
+      tidyr::complete(time_h, replicate) |>
+      arrange(time_h, replicate) |>
+      tidyr::pivot_wider(names_from = replicate, values_from = value) |>
+      select(dplyr::all_of(replicate_levels)) |>
+      as.matrix()
+  }
+
+  wb <- openxlsx::createWorkbook()
+  openxlsx::addWorksheet(wb, "Sheet1")
+
+  openxlsx::writeData(wb, "Sheet1", "-Sne", startCol = 2, startRow = 1, colNames = FALSE)
+  openxlsx::writeData(wb, "Sheet1", "+Sne", startCol = 5, startRow = 1, colNames = FALSE)
+  openxlsx::writeData(wb, "Sheet1", timepoints, startCol = 1, startRow = 2, colNames = FALSE)
+  openxlsx::writeData(
+    wb,
+    "Sheet1",
+    make_group_matrix("Uninfected"),
+    startCol = 2,
+    startRow = 2,
+    colNames = FALSE
+  )
+  openxlsx::writeData(
+    wb,
+    "Sheet1",
+    make_group_matrix("Infected"),
+    startCol = 5,
+    startRow = 2,
+    colNames = FALSE
+  )
+
+  openxlsx::setColWidths(wb, "Sheet1", cols = 1:7, widths = 12)
+  openxlsx::saveWorkbook(wb, xlsx_path, overwrite = TRUE)
+  invisible(xlsx_path)
+}
+
+prism_labelled_panel_index <- flux_analysis_readouts |>
+  filter(
+    readout == "labelled_incorporation",
+    is_tracer_treated
+  ) |>
+  distinct(experiment, tracer, feature_type, feature_name) |>
+  arrange(experiment, feature_name)
+
+if (write_outputs) {
+  dir.create(prism_labelled_dir, recursive = TRUE, showWarnings = FALSE)
+}
+
+prism_labelled_table_exports <- tibble()
+
+for (i in seq_len(nrow(prism_labelled_panel_index))) {
+  panel_experiment <- prism_labelled_panel_index$experiment[i]
+  panel_tracer <- prism_labelled_panel_index$tracer[i]
+  panel_feature_type <- prism_labelled_panel_index$feature_type[i]
+  panel_feature <- prism_labelled_panel_index$feature_name[i]
+  file_stem <- paste(
+    safe_file_part(panel_experiment),
+    safe_file_part(panel_feature),
+    sep = "_"
+  )
+  xlsx_path <- file.path(prism_labelled_dir, paste0(file_stem, ".xlsx"))
+
+  panel_data <- flux_analysis_readouts |>
+    filter(
+      readout == "labelled_incorporation",
+      is_tracer_treated,
+      experiment == panel_experiment,
+      feature_name == panel_feature
+    )
+
+  if (write_outputs) {
+    write_prism_labelled_table(panel_data, xlsx_path)
+  }
+
+  prism_labelled_table_exports <- bind_rows(
+    prism_labelled_table_exports,
+    tibble(
+      panel_type = "labelled_incorporation",
+      experiment = as.character(panel_experiment),
+      tracer = as.character(panel_tracer),
+      feature_type = as.character(panel_feature_type),
+      feature_name = as.character(panel_feature),
+      unit = "pmol_per_sample",
+      prism_group_left = "-Sne",
+      prism_group_right = "+Sne",
+      file = xlsx_path
+    )
+  )
+}
+
+if (write_outputs) {
+  write.csv(
+    prism_labelled_table_exports,
+    file.path(prism_labelled_dir, "prism_labelled_table_exports.csv"),
+    row.names = FALSE
+  )
+  openxlsx::write.xlsx(
+    prism_labelled_table_exports,
+    file.path(prism_labelled_dir, "prism_labelled_table_exports.xlsx"),
+    overwrite = TRUE
+  )
+}
+
+prism_labelled_table_exports
+```
+
+## 13. Statistical Markdown Exports
+
+This chunk writes reviewer-friendly Markdown summaries of the statistical
+methods and current results whenever `write_outputs` is enabled.
+
+```{r statistical-markdown-exports}
+format_result_number <- function(x, digits = 3) {
+  vapply(x, function(value) {
+    if (is.na(value)) {
+      "NA"
+    } else if (is.numeric(value) && is.finite(value) && value != 0 && abs(value) < 10^-digits) {
+      formatC(value, format = "e", digits = 2)
+    } else if (is.numeric(value) && is.finite(value)) {
+      formatC(value, format = "f", digits = digits)
+    } else {
+      as.character(value)
+    }
+  }, character(1))
+}
+
+format_p_value <- function(x) {
+  vapply(x, function(value) {
+    if (is.na(value)) {
+      "NA"
+    } else if (value < 0.001) {
+      formatC(value, format = "e", digits = 2)
+    } else {
+      formatC(value, format = "f", digits = 3)
+    }
+  }, character(1))
+}
+
+as_markdown_table <- function(data) {
+  if (nrow(data) == 0) {
+    return("_No rows matched this criterion._")
+  }
+
+  table_data <- data
+  table_data[] <- lapply(table_data, as.character)
+
+  c(
+    paste("|", paste(names(table_data), collapse = " | "), "|"),
+    paste("|", paste(rep("---", ncol(table_data)), collapse = " | "), "|"),
+    apply(
+      table_data,
+      1,
+      function(row) paste("|", paste(row, collapse = " | "), "|")
+    )
+  )
+}
+
+write_markdown_if_requested <- function(lines, filename) {
+  if (write_outputs) {
+    stats_dir <- file.path(output_dir, "statistical_results_markdown")
+    dir.create(stats_dir, recursive = TRUE, showWarnings = FALSE)
+    writeLines(lines, file.path(stats_dir, filename))
+  }
+  invisible(lines)
+}
+
+auc_table <- auc_ratio_summary |>
+  transmute(
+    Experiment = as.character(experiment),
+    `Feature type` = as.character(feature_type),
+    Feature = as.character(feature_name),
+    `Infected / uninfected AUC` = format_result_number(
+      infected_over_uninfected_auc
+    )
+  )
+
+timepoint_significant <- timepoint_tests |>
+  filter(p_fdr < 0.05) |>
+  transmute(
+    Experiment = as.character(experiment),
+    `Feature type` = as.character(feature_type),
+    Feature = as.character(feature_name),
+    `Time (h)` = format_result_number(time_h, digits = 1),
+    Contrast = contrast,
+    `Infected / uninfected` = format_result_number(
+      ratio_infected_over_uninfected
+    ),
+    `95% ratio CI` = paste0(
+      format_result_number(ratio_lower_95),
+      "-",
+      format_result_number(ratio_upper_95)
+    ),
+    `t ratio` = format_result_number(t_ratio, digits = 2),
+    FDR = format_p_value(p_fdr)
+  )
+
+timepoint_primary_counts <- timepoint_tests |>
+  filter(p_fdr < 0.05) |>
+  count(experiment, name = "n_primary_experiment_fdr")
+
+timepoint_panel_counts <- timepoint_tests_panel_fdr |>
+  filter(p_fdr < 0.05) |>
+  count(experiment, name = "n_panel_fdr")
+
+timepoint_count_table <- full_join(
+  timepoint_primary_counts,
+  timepoint_panel_counts,
+  by = "experiment"
+) |>
+  mutate(
+    n_primary_experiment_fdr = replace_na(n_primary_experiment_fdr, 0L),
+    n_panel_fdr = replace_na(n_panel_fdr, 0L)
+  ) |>
+  transmute(
+    Experiment = as.character(experiment),
+    `Significant tests, experiment-level FDR` = n_primary_experiment_fdr,
+    `Significant tests, panel-level FDR sensitivity` = n_panel_fdr
+  )
+
+infection_time_significant <- infection_time_models |>
+  filter(p_fdr_infection_time < 0.05) |>
+  transmute(
+    Experiment = as.character(experiment),
+    `Feature type` = as.character(feature_type),
+    Feature = as.character(feature_name),
+    `Raw p, infection:time` = format_p_value(p_infection_time),
+    `FDR, infection:time` = format_p_value(p_fdr_infection_time)
+  )
+
+zero_nearzero_nonzero <- zero_nearzero_summary |>
+  filter(near_zero_pct > 0) |>
+  transmute(
+    Experiment = as.character(experiment),
+    `Feature type` = as.character(feature_type),
+    Feature = as.character(feature_name),
+    n = n,
+    `Zero n` = zero_n,
+    `Near-zero %` = format_result_number(near_zero_pct, digits = 1)
+  )
+
+overview_lines <- c(
+  "# Isotope Tracer Statistical Results Overview",
+  "",
+  "This static summary describes the current Pal-d3 and d7-dhSph tracer analyses after the species-level correction.",
+  "",
+  "LCBs are treated as individual molecule-level features (`dhSph`, `Sph`, `S1P`, and labelled forms). Non-LCB sphingolipid readouts are treated as individual labelled or unlabelled molecular species rather than class totals.",
+  "",
+  "The statistical tests use:",
+  "",
+  "```text",
+  paste0("y = log10(value + ", pseudovalue, ")"),
+  "```",
+  "",
+  "Plots remain on untransformed absolute `pmol / sample` values for biological readability. Class-level totals are retained only as supporting/QC outputs.",
+  "",
+  "Timepoint pairwise tests use `emmeans` for the explicit contrast `Infected - Uninfected`. The primary FDR correction is Benjamini-Hochberg within each tracer experiment across all tested labelled species and sampled timepoints.",
+  "",
+  "Species with zero or near-zero labelled signal can produce perfect-fit model warnings; inspect `diagnostics_zero_nearzero_summary.csv` and residual diagnostic plots before over-interpreting those panels.",
+  "",
+  "## AUC Summary",
+  "",
+  "```text",
+  "AUC = sum((t[i+1] - t[i]) * (y[i] + y[i+1]) / 2)",
+  "AUC ratio = mean AUC infected / mean AUC uninfected",
+  "```",
+  "",
+  as_markdown_table(auc_table),
+  "",
+  "## Timepoint FDR Counts",
+  "",
+  as_markdown_table(timepoint_count_table),
+  "",
+  "## Significant Timepoint Pairwise Comparisons",
+  "",
+  as_markdown_table(timepoint_significant),
+  "",
+  "## Significant Infection-by-Time Interactions",
+  "",
+  as_markdown_table(infection_time_significant),
+  "",
+  "## Zero And Near-Zero Labelled Features",
+  "",
+  as_markdown_table(zero_nearzero_nonzero)
+)
+
+auc_lines <- c(
+  "# AUC Results",
+  "",
+  "AUC is calculated on untransformed absolute `pmol / sample` values using the trapezoid rule across the observed 0.5-8 h time course.",
+  "",
+  "The reported ratio is mean infected AUC divided by mean uninfected AUC for each labelled species-level panel.",
+  "",
+  as_markdown_table(auc_table)
+)
+
+timepoint_lines <- c(
+  "# Timepoint Pairwise Comparison Results",
+  "",
+  "At each timepoint and species-level feature, infected and uninfected tracer-treated samples are compared using:",
+  "",
+  "```text",
+  paste0("model: log10(value + ", pseudovalue, ") ~ infection"),
+  "pairwise contrast: Infected - Uninfected",
+  "infected / uninfected = 10^(emmeans contrast estimate)",
+  "```",
+  "",
+  "The primary p-value shown below is Benjamini-Hochberg FDR corrected within each tracer experiment across all tested labelled species and sampled timepoints.",
+  "",
+  "A secondary panel-level FDR sensitivity table is also written to `timepoint_pairwise_emmeans_panel_fdr_labelled_incorporation.csv`.",
+  "",
+  as_markdown_table(timepoint_significant)
+)
+
+infection_time_lines <- c(
+  "# Infection-by-Time Model Results",
+  "",
+  "For each labelled and unlabelled species-level panel, the curve-level model is:",
+  "",
+  "```text",
+  paste0("log10(value + ", pseudovalue, ") ~ infection * time_f"),
+  "```",
+  "",
+  "The line-plot annotation uses the BH-adjusted `infection:time_f` p-value, reported as `curve FDR`. The table below lists labelled incorporation panels with FDR < 0.05 for the infection-by-time interaction.",
+  "",
+  as_markdown_table(infection_time_significant)
+)
+
+write_markdown_if_requested(overview_lines, "00_statistical_results_overview.md")
+write_markdown_if_requested(auc_lines, "01_auc_results.md")
+write_markdown_if_requested(timepoint_lines, "02_timepoint_tests.md")
+write_markdown_if_requested(infection_time_lines, "03_infection_time_models.md")
+
+list(
+  auc_rows = nrow(auc_table),
+  significant_timepoint_rows = nrow(timepoint_significant),
+  significant_infection_time_rows = nrow(infection_time_significant),
+  near_zero_feature_rows = nrow(zero_nearzero_nonzero)
+)
+```
+
+## 14. Working Interpretation Notes
+
+```{r interpretation-notes}
+analysis_notes <- data.frame(
+  point = c(
+    "Primary unit",
+    "Labelled and unlabelled readouts",
+    "LCB handling",
+    "Curve FDR annotation",
+    "Pal-d3 interpretation",
+    "d7-dhSph interpretation",
+    "AUC use",
+    "Timepoint use",
+    "Class-level totals"
+  ),
+  note = c(
+    "Use absolute pmol / sample as the primary analysis unit. The normalized block can be imported for sensitivity checks.",
+    "Keep labelled incorporation and unlabelled abundance side by side at species level because they answer different biological questions.",
+    "Do not sum LCBs into one broad class. Treat dhSph, Sph, S1P, and labelled LCBs as molecule-level features.",
+    "The curve FDR shown on line plots is the BH-adjusted infection-by-time interaction p-value from log10(value + 0.01) ~ infection * time_f.",
+    "Pal-d3 reports apparent entry from supplied palmitate into the de novo sphingolipid pathway.",
+    "d7-dhSph reports handling of a supplied sphingoid base. Inspect d7-dhSph, d7-Sph, and d7-S1P separately.",
+    "Use AUC as a compact species-level summary of labelled signal across the observed time course.",
+    "Use experiment-level BH-FDR for timepoint tests across species/timepoint comparisons within each tracer experiment.",
+    "Class-level totals are retained as supporting/QC outputs only; they are not the primary tracer analysis features."
+  ),
+  stringsAsFactors = FALSE
+)
+
+write_csv_if_requested(analysis_notes, "analysis_notes.csv")
+analysis_notes
+```
+
+## 15. Session Info
+
+```{r session-info}
+sessionInfo()
+```
