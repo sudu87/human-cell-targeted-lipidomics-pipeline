@@ -95,6 +95,8 @@ The script:
 - stops with an informative error if any selected value is zero or negative
 - applies `log10()` to each replicate-level lipid measurement
 - calculates mean, standard deviation, sample size, and standard error for each `condition x infection x lipid` group
+- calculates one global y-axis range from the largest `mean + SE`, rounded up to the next 0.5 log10 unit
+- applies the same y-axis limits to every individual lipid plot and every combined-plot facet
 - writes the summary table as a CSV file
 - creates one bar plot per selected lipid
 - creates one combined faceted plot with a shared legend
@@ -130,6 +132,7 @@ The script creates:
 - `lipids_present`: selected lipid columns found in the input file
 - `df_long`: long-format lipid data
 - `sum_df`: summary statistics by condition, infection, and lipid
+- `global_y_limits`: shared y-axis limits used by all plots
 - `plots_by_lipid`: named list of individual ggplot objects
 - `p_combined`: combined faceted ggplot object
 
@@ -137,6 +140,6 @@ The script creates:
 
 - The original plotting idea used separate plot objects and `gridExtra::grid.arrange()`.
 - This standalone script uses `facet_wrap()` for the combined plot, which avoids requiring extra packages such as `cowplot` or `gridExtra`.
-- The y-axis starts at zero for the bar plots.
+- All bar plots share the same y-axis range and start at zero.
 - Error bars show mean ± standard error.
 - If your raw file has lipid columns with different cleaned names, update `lipids_interest` and `lipid_labels`.

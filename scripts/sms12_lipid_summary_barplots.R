@@ -169,6 +169,9 @@ sum_df <- df_long |>
     .groups = "drop"
   )
 
+global_y_max <- ceiling(max(sum_df$mean + sum_df$se, na.rm = TRUE) * 2) / 2
+global_y_limits <- c(0, global_y_max)
+
 write.csv(
   sum_df,
   file = file.path(output_dir, "sms12_lipid_summary_statistics_log10.csv"),
@@ -179,7 +182,8 @@ write.csv(
 plot_one_lipid <- function(
   sum_df,
   lipid_name,
-  y_label = "log10(pmol / sample)"
+  y_label = "log10(pmol / sample)",
+  y_limits = global_y_limits
 ) {
   ggplot(
     sum_df |> filter(lipid == lipid_name),
@@ -201,7 +205,7 @@ plot_one_lipid <- function(
       name = "Infection status"
     ) +
     scale_y_continuous(
-      limits = c(0, NA),
+      limits = y_limits,
       expand = expansion(mult = c(0, 0), add = c(0, 0))
     ) +
     labs(
@@ -223,7 +227,8 @@ plots_by_lipid <- lapply(lipids_present, function(lipid_name) {
   plot_one_lipid(
     sum_df,
     lipid_name,
-    y_label = unname(lipid_labels[[lipid_name]])
+    y_label = unname(lipid_labels[[lipid_name]]),
+    y_limits = global_y_limits
   )
 })
 names(plots_by_lipid) <- lipids_present
@@ -262,15 +267,15 @@ p_combined <- ggplot(
     position = position_dodge(width = 0.7),
     width = 0.2
   ) +
-  facet_wrap(~ lipid_label, scales = "free_y", nrow = 2) +
+  facet_wrap(~ lipid_label, scales = "fixed", nrow = 2) +
   scale_fill_manual(
     values = c("no" = "#009E73", "yes" = "#CC79A7"),
     labels = infection_labels,
     name = "Infection status"
   ) +
   scale_y_continuous(
-    limits = c(0, NA),
-    expand = expansion(mult = c(0, 0.05), add = c(0, 0))
+    limits = global_y_limits,
+    expand = expansion(mult = c(0, 0), add = c(0, 0))
   ) +
   labs(
     x = NULL,
