@@ -2,7 +2,7 @@
 
 This document explains how to use `scripts/sms12_lipid_summary_barplots.R`.
 
-The script creates grouped bar plots for selected SMS1/2 lipid totals. It reads a raw Excel file, summarises each selected lipid by `condition` and `infection`, and writes both individual lipid plots and one combined faceted plot.
+The script creates grouped bar plots for selected SMS1/2 lipid totals. It reads a raw Excel file, applies `log10()` to replicate-level `pmol/sample` measurements, summarises each selected lipid by `condition` and `infection`, and writes both individual lipid plots and one combined faceted plot.
 
 ## Required R packages
 
@@ -20,12 +20,13 @@ Install missing packages before running the script.
 
 ## User-defined paths
 
-Open `scripts/sms12_lipid_summary_barplots.R` and set:
+Open `scripts/sms12_lipid_summary_barplots.R` and set the placeholder paths, or provide them when running the script:
 
-```r
-input_file <- "path/to/your/input_file.xlsx"
-sheet_name <- "your_sheet_name"
-output_dir <- "path/to/your/output_directory"
+```sh
+SMS12_BARPLOT_INPUT="path/to/input_file.xlsx" \
+SMS12_BARPLOT_SHEET="sheet_name" \
+SMS12_BARPLOT_OUTPUT_DIR="outputs/sms12_lipid_summary_barplots_log10" \
+Rscript scripts/sms12_lipid_summary_barplots.R
 ```
 
 The input file should be the raw Excel workbook containing the lipid measurements.
@@ -37,7 +38,7 @@ After `janitor::clean_names()` is applied, the Excel sheet must contain:
 - one row per sample
 - a column named `infection`
 - a column named `condition`
-- numeric lipid measurement columns
+- numeric lipid measurement columns containing positive `pmol/sample` values
 
 By default, the script plots:
 
@@ -91,12 +92,14 @@ The script:
 - checks for `infection` and `condition`
 - converts selected lipid columns to numeric
 - reshapes selected lipids from wide format to long format
+- stops with an informative error if any selected value is zero or negative
+- applies `log10()` to each replicate-level lipid measurement
 - calculates mean, standard deviation, sample size, and standard error for each `condition x infection x lipid` group
 - writes the summary table as a CSV file
 - creates one bar plot per selected lipid
 - creates one combined faceted plot with a shared legend
 
-The plotted values are raw lipid values, not log-transformed values.
+The plotted values are means of replicate-level `log10(pmol/sample)` measurements. Error bars show the standard error calculated on that transformed scale.
 
 ## Output files
 
@@ -105,18 +108,18 @@ Outputs are written to `output_dir`.
 The script writes:
 
 ```text
-sms12_lipid_summary_statistics.csv
-sms12_selected_lipid_barplots.pdf
-sms12_selected_lipid_barplots.png
-<lipid_name>_barplot.pdf
-<lipid_name>_barplot.png
+sms12_lipid_summary_statistics_log10.csv
+sms12_selected_lipid_barplots_log10.pdf
+sms12_selected_lipid_barplots_log10.png
+<lipid_name>_log10_barplot.pdf
+<lipid_name>_log10_barplot.png
 ```
 
 For example:
 
 ```text
-cer_total_barplot.pdf
-sm_total_barplot.png
+cer_total_log10_barplot.pdf
+sm_total_log10_barplot.png
 ```
 
 ## Main R objects created

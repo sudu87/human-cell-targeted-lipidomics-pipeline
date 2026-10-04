@@ -7,14 +7,24 @@ library(ggplot2)
 # ==============================
 # SMS1/2 lipid summary bar plots
 # - Reads one raw Excel sheet containing infection, condition, and lipid columns
+# - Applies log10 to replicate-level pmol/sample measurements
 # - Summarises selected lipids by condition and infection
 # - Plots mean +/- SE grouped bar plots for each selected lipid
 # ==============================
 
 ## ---- Configure user-defined input and output paths ----
-input_file <- "path/to/your/input_file.xlsx"
-sheet_name <- "your_sheet_name"
-output_dir <- "path/to/your/output_directory"
+input_file <- Sys.getenv(
+  "SMS12_BARPLOT_INPUT",
+  unset = "path/to/your/input_file.xlsx"
+)
+sheet_name <- Sys.getenv(
+  "SMS12_BARPLOT_SHEET",
+  unset = "your_sheet_name"
+)
+output_dir <- Sys.getenv(
+  "SMS12_BARPLOT_OUTPUT_DIR",
+  unset = "outputs/sms12_lipid_summary_barplots_log10"
+)
 
 ## ---- Configure plot groups ----
 # Set to NULL to use the order found in the input file.
@@ -42,12 +52,12 @@ lipids_interest <- c(
 )
 
 lipid_labels <- c(
-  "cer_total" = "cer_total (pmol / sample)",
-  "sm_total" = "SM (pmol / sample)",
-  "hex_cer_total" = "hex_cer_total (pmol / sample)",
-  "lac_cer_total" = "lac_cer_total (pmol / sample)",
-  "dh_sm_total" = "dh_sm_total (pmol / sample)",
-  "sph" = "sph_total (pmol / sample)"
+  "cer_total" = "cer_total (log10 pmol / sample)",
+  "sm_total" = "SM (log10 pmol / sample)",
+  "hex_cer_total" = "hex_cer_total (log10 pmol / sample)",
+  "lac_cer_total" = "lac_cer_total (log10 pmol / sample)",
+  "dh_sm_total" = "dh_sm_total (log10 pmol / sample)",
+  "sph" = "sph_total (log10 pmol / sample)"
 )
 
 if (!file.exists(input_file)) {
@@ -118,6 +128,23 @@ df_sms12_raw <- df_sms12_raw |>
   ) |>
   mutate(across(all_of(lipids_present), ~ suppressWarnings(as.numeric(.x))))
 
+nonpositive_counts <- vapply(
+  df_sms12_raw[lipids_present],
+  function(x) sum(!is.na(x) & x <= 0),
+  integer(1)
+)
+if (any(nonpositive_counts > 0)) {
+  stop(
+    "Plain log10 requires positive values. Non-positive counts: ",
+    paste(
+      names(nonpositive_counts)[nonpositive_counts > 0],
+      nonpositive_counts[nonpositive_counts > 0],
+      sep = "=",
+      collapse = ", "
+    )
+  )
+}
+
 ## ---- Reshape and summarise selected lipids ----
 df_long <- df_sms12_raw |>
   select(infection, condition, all_of(lipids_present)) |>
@@ -127,6 +154,7 @@ df_long <- df_sms12_raw |>
     values_to = "value"
   ) |>
   mutate(
+    value = log10(value),
     lipid = factor(lipid, levels = lipids_present),
     lipid_label = recode(as.character(lipid), !!!lipid_labels)
   )
@@ -143,12 +171,16 @@ sum_df <- df_long |>
 
 write.csv(
   sum_df,
-  file = file.path(output_dir, "sms12_lipid_summary_statistics.csv"),
+  file = file.path(output_dir, "sms12_lipid_summary_statistics_log10.csv"),
   row.names = FALSE
 )
 
 ## ---- Plot helper ----
-plot_one_lipid <- function(sum_df, lipid_name, y_label = "pmol / sample") {
+plot_one_lipid <- function(
+  sum_df,
+  lipid_name,
+  y_label = "log10(pmol / sample)"
+) {
   ggplot(
     sum_df |> filter(lipid == lipid_name),
     aes(x = condition, y = mean, fill = infection)
@@ -198,7 +230,7 @@ names(plots_by_lipid) <- lipids_present
 
 for (lipid_name in lipids_present) {
   ggsave(
-    filename = file.path(output_dir, paste0(lipid_name, "_barplot.pdf")),
+    filename = file.path(output_dir, paste0(lipid_name, "_log10_barplot.pdf")),
     plot = plots_by_lipid[[lipid_name]],
     width = 5,
     height = 4,
@@ -206,7 +238,7 @@ for (lipid_name in lipids_present) {
   )
 
   ggsave(
-    filename = file.path(output_dir, paste0(lipid_name, "_barplot.png")),
+    filename = file.path(output_dir, paste0(lipid_name, "_log10_barplot.png")),
     plot = plots_by_lipid[[lipid_name]],
     width = 5,
     height = 4,
@@ -242,7 +274,7 @@ p_combined <- ggplot(
   ) +
   labs(
     x = NULL,
-    y = "pmol / sample"
+    y = "log10(pmol / sample)"
   ) +
   theme_classic(base_size = 10) +
   theme(
@@ -257,7 +289,7 @@ p_combined <- ggplot(
   )
 
 ggsave(
-  filename = file.path(output_dir, "sms12_selected_lipid_barplots.pdf"),
+  filename = file.path(output_dir, "sms12_selected_lipid_barplots_log10.pdf"),
   plot = p_combined,
   width = 11,
   height = 7,
@@ -265,7 +297,7 @@ ggsave(
 )
 
 ggsave(
-  filename = file.path(output_dir, "sms12_selected_lipid_barplots.png"),
+  filename = file.path(output_dir, "sms12_selected_lipid_barplots_log10.png"),
   plot = p_combined,
   width = 11,
   height = 7,
