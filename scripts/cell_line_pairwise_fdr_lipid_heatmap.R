@@ -18,7 +18,7 @@ output_prefix <- Sys.getenv(
 )
 
 alpha <- 0.05
-fill_limits <- c(-1.5, 1.5)
+fill_limits <- c(-2, 2)
 
 total_lipid_order <- c(
   "dh_sph", "sph", "s1p",
@@ -160,7 +160,7 @@ p_heatmap <- ggplot(
     breaks = seq(fill_limits[1], fill_limits[2], by = 0.5),
     oob = scales::squish,
     na.value = "grey85",
-    name = "log2 fold-change"
+    name = NULL
   ) +
   facet_grid(. ~ cell_line) +
   labs(x = NULL, y = NULL) +
@@ -170,7 +170,7 @@ p_heatmap <- ggplot(
     axis.text.y = element_text(size = 10, hjust = 0),
     panel.grid = element_blank(),
     strip.text = element_text(face = "bold", size = 10),
-    legend.title = element_text(size = 9)
+    legend.title = element_blank()
   )
 
 ggsave(

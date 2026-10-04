@@ -161,7 +161,7 @@ estimate_scale <- "fold_change"
 The default SMS12 color limits are symmetric at -9 to +9. This range includes
 the largest audited significant effect while preserving a common scale across
 the selected contrasts. Adjust `fill_limits` when applying the script to a
-different dataset.
+different dataset. The color bar is shown without a title.
 
 ## What the script does
 

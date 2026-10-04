@@ -230,6 +230,7 @@ p_heatmap <- ggplot(plot_df, aes(x = contrast, y = lipid, fill = log2FC_sig)) +
     breaks = seq(fill_limits[1], fill_limits[2], by = 3),
     oob = scales::squish,
     na.value = "grey85",
+    name = NULL,
     guide = guide_colorbar(barwidth = 0.7)
   ) +
   facet_grid(. ~ infection, scales = "free_x", space = "free_x") +

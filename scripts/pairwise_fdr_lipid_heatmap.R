@@ -45,8 +45,6 @@ plot_df <- df_hm %>%
     infection = factor(infection, levels = c("Uninfected", "infected"))
   )
 
-## ---- Set legend title here ----
-legend_title <- "Treatment\nvs\nUntreated"
 fill_limits <- c(-3, 3)
 
 ## ---- Heatmap ----
@@ -61,7 +59,7 @@ heatmap_plot <- ggplot(plot_df, aes(x = contrast, y = lipid, fill = log2FC_sig))
     limits = fill_limits,
     oob = scales::squish,
     na.value = "grey85",
-    name = legend_title,
+    name = NULL,
     guide = guide_colorbar(barwidth = 0.7)
   ) +
   facet_grid(~ infection) +
@@ -72,5 +70,5 @@ heatmap_plot <- ggplot(plot_df, aes(x = contrast, y = lipid, fill = log2FC_sig))
     axis.text.x = element_blank(),
     panel.grid = element_blank(),
     strip.text = element_text(face = "bold", size = 10, angle = 90),
-    legend.title = element_text(size = 10, face = "bold")
+    legend.title = element_blank()
   )

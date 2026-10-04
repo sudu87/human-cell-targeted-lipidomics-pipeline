@@ -30,12 +30,6 @@ lipid_order <- c(
 )
 ```
 
-* Edit the legend title in the following line so it matches your comparison:
-
-```r
-legend_title <- "Treatment\nvs\nUntreated"
-```
-
 * Check that the `infection` column contains the exact labels `Uninfected` and `infected`.
 * Make sure the `lipid` column contains names that match the entries in your `lipid_order` object.
 * Make sure `estimate` and `p.value` contain numeric values.
@@ -77,12 +71,6 @@ lipid_order <- c(
 )
 ```
 
-Update the legend title here:
-
-```r
-legend_title <- "Treatment\nvs\nUntreated"
-```
-
 If needed, edit the infection factor order here:
 
 ```r
@@ -119,6 +107,7 @@ This allows you to reuse the heatmap later for plotting, exporting, or combining
 * These `NA` values are shown in grey in the heatmap.
 * Significant effects outside the configured color limits are saturated at the
   nearest legend endpoint with `scales::squish`; they are not converted to grey.
+* The color bar is displayed without a title.
 * The script does not save the heatmap to a file automatically.
 * Make sure the required packages are loaded before running the script.
 
