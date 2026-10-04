@@ -38,6 +38,7 @@ The analysis workflow includes:
 │  ├─ transformation_diagnostics.md
 │  ├─ sms12_manova_pca_dispersion_analysis.md
 │  ├─ sms12_individual_lipids_permanova_dispersion_analysis.md
+│  ├─ cell_line_pairwise_fdr_lipid_heatmap.md
 │  ├─ custom_pairwise_lipid_contrast_heatmap.md
 │  ├─ pairwise_fdr_lipid_heatmap.md
 │  └─ ...
@@ -45,6 +46,7 @@ The analysis workflow includes:
 │  ├─ transformation_diagnostics.R
 │  ├─ sms12_manova_pca_dispersion_analysis.R
 │  ├─ sms12_individual_lipids_permanova_dispersion_analysis.R
+│  ├─ cell_line_pairwise_fdr_lipid_heatmap.R
 │  ├─ custom_pairwise_lipid_contrast_heatmap.R
 │  ├─ pairwise_fdr_lipid_heatmap.R
 │  ├─ isotope_tracer_flux_analysis.Rmd

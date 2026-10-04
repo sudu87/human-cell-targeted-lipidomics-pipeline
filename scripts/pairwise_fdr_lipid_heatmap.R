@@ -47,6 +47,7 @@ plot_df <- df_hm %>%
 
 ## ---- Set legend title here ----
 legend_title <- "Treatment\nvs\nUntreated"
+fill_limits <- c(-3, 3)
 
 ## ---- Heatmap ----
 heatmap_plot <- ggplot(plot_df, aes(x = contrast, y = lipid, fill = log2FC_sig)) +
@@ -57,7 +58,8 @@ heatmap_plot <- ggplot(plot_df, aes(x = contrast, y = lipid, fill = log2FC_sig))
     mid = "white",
     high = "#D7191C",
     midpoint = 0,
-    limits = c(-3, 3),
+    limits = fill_limits,
+    oob = scales::squish,
     na.value = "grey85",
     name = legend_title,
     guide = guide_colorbar(barwidth = 0.7)

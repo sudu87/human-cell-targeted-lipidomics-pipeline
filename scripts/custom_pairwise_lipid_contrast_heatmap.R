@@ -11,10 +11,19 @@ library(ggplot2)
 # ==============================
 
 ## ---- Configure user-defined input and output paths ----
-input_file <- "path/to/your/pairwise_results.xlsx"
+input_file <- Sys.getenv(
+  "CUSTOM_PAIRWISE_HEATMAP_INPUT",
+  unset = "path/to/your/pairwise_results.xlsx"
+)
 sheet_name <- NULL
-output_dir <- "path/to/your/output_directory"
-output_prefix <- "custom_pairwise_lipid_contrast_heatmap"
+output_dir <- Sys.getenv(
+  "CUSTOM_PAIRWISE_HEATMAP_OUTPUT_DIR",
+  unset = "path/to/your/output_directory"
+)
+output_prefix <- Sys.getenv(
+  "CUSTOM_PAIRWISE_HEATMAP_PREFIX",
+  unset = "custom_pairwise_lipid_contrast_heatmap"
+)
 
 ## ---- Configure input columns ----
 lipid_col <- "lipid"
@@ -176,7 +185,10 @@ if (length(extra_infections) > 0) {
 plot_df <- df_hm |>
   mutate(
     log2FC = estimate_to_log2fc(estimate, estimate_scale),
-    log2FC_sig = ifelse(p_value < alpha, log2FC, NA_real_),
+    significant = p_value < alpha,
+    log2FC_sig = ifelse(significant, log2FC, NA_real_),
+    outside_fill_limits = significant &
+      (log2FC < fill_limits[1] | log2FC > fill_limits[2]),
     lipid = factor(lipid, levels = rev(lipid_levels)),
     contrast = factor(contrast, levels = contrast_levels),
     infection = recode(as.character(infection), !!!infection_labels),
@@ -215,6 +227,7 @@ p_heatmap <- ggplot(plot_df, aes(x = contrast, y = lipid, fill = log2FC_sig)) +
     high = "#D7191C",
     midpoint = 0,
     limits = fill_limits,
+    oob = scales::squish,
     na.value = "grey85",
     guide = guide_colorbar(barwidth = 0.7)
   ) +

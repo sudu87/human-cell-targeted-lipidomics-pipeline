@@ -117,6 +117,8 @@ This allows you to reuse the heatmap later for plotting, exporting, or combining
 
 * Non-significant values are replaced with `NA` in the plotted fill variable.
 * These `NA` values are shown in grey in the heatmap.
+* Significant effects outside the configured color limits are saturated at the
+  nearest legend endpoint with `scales::squish`; they are not converted to grey.
 * The script does not save the heatmap to a file automatically.
 * Make sure the required packages are loaded before running the script.
 

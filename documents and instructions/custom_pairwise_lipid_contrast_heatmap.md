@@ -28,6 +28,15 @@ output_dir <- "path/to/your/output_directory"
 
 Use `sheet_name <- NULL` to read the first worksheet, or set `sheet_name` to a specific Excel sheet name.
 
+The paths and output prefix can also be supplied without editing the script:
+
+```sh
+CUSTOM_PAIRWISE_HEATMAP_INPUT="path/to/pairwise_results.xlsx" \
+CUSTOM_PAIRWISE_HEATMAP_OUTPUT_DIR="outputs/custom_pairwise_heatmap" \
+CUSTOM_PAIRWISE_HEATMAP_PREFIX="my_heatmap" \
+Rscript scripts/custom_pairwise_lipid_contrast_heatmap.R
+```
+
 ## Input data requirements
 
 The input file should contain pairwise lipid contrast results with columns for:
@@ -160,6 +169,8 @@ The script:
 - converts estimates to log2 fold-change
 - keeps significant values where the configured p-value column is below `alpha`
 - sets non-significant values to `NA`
+- saturates significant effects outside `fill_limits` at the nearest color-scale
+  endpoint instead of treating them as missing
 - plots significant log2 fold-change values in a heatmap
 - shows non-significant or missing cells as grey
 - facets the heatmap by infection status
@@ -195,4 +206,6 @@ The script creates:
 - The key customization is `keep_contrasts`, which chooses and orders the pairwise comparisons.
 - The second key customization is `custom_lipid_order`, which chooses and orders lipid rows.
 - Non-significant cells are grey because `log2FC_sig` is set to `NA` when `p_value >= alpha`.
+- `outside_fill_limits` in the plot-data CSV identifies significant effects that
+  are visually capped at the lower or upper color limit.
 - X-axis labels are hidden by default. Set `show_x_axis_labels <- TRUE` to display contrast names.
