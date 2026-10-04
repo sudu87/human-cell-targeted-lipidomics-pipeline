@@ -64,7 +64,7 @@ keep_only_custom_lipids <- TRUE
 ## ---- Configure plotting options ----
 alpha <- 0.05
 estimate_scale <- "log10"
-fill_limits <- c(-8, 8)
+fill_limits <- c(-9, 9)
 infection_order <- c("no", "yes")
 infection_labels <- c("no" = "Uninfected", "yes" = "Infected")
 show_x_axis_labels <- FALSE
@@ -227,6 +227,7 @@ p_heatmap <- ggplot(plot_df, aes(x = contrast, y = lipid, fill = log2FC_sig)) +
     high = "#D7191C",
     midpoint = 0,
     limits = fill_limits,
+    breaks = seq(fill_limits[1], fill_limits[2], by = 3),
     oob = scales::squish,
     na.value = "grey85",
     guide = guide_colorbar(barwidth = 0.7)

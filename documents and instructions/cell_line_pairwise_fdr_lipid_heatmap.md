@@ -31,7 +31,8 @@ order based on the input lipid names.
 ## Significance and color limits
 
 Cells with `p_fdr < 0.05` are colored by log2 fold-change. Non-significant cells
-are grey. The color scale is fixed at -1 to +1 for comparability.
+are grey. The color scale is fixed at -1.5 to +1.5 so that all effects in the
+audited HeLa/HUVEC total and individual datasets are displayed without clipping.
 
 Significant effects beyond these limits are saturated at the nearest endpoint
 using `scales::squish`. This is important: ggplot2's default behavior censors

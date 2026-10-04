@@ -18,7 +18,7 @@ output_prefix <- Sys.getenv(
 )
 
 alpha <- 0.05
-fill_limits <- c(-1, 1)
+fill_limits <- c(-1.5, 1.5)
 
 total_lipid_order <- c(
   "dh_sph", "sph", "s1p",
